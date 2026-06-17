@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+
+# Environment
+.env
+
+# Models (large files)
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.zip
+!models/.gitkeep
+
+# Data
+data/*.csv
+data/*.parquet
+data/*.json
+!data/.gitkeep
+
+# Outputs
+outputs/*
+!outputs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# Docker
+*.log
+
+# SUMO
+core/rl/sumo/*.sumocfg
+core/rl/sumo/*.net.xml
+core/rl/sumo/*.rou.xml
+
+# Evidence clips
+clips/

@@ -14,26 +14,6 @@ build/
 # Environment
 .env
 
-# Models (large files)
-models/*.pt
-models/*.pth
-models/*.onnx
-models/*.zip
-!models/.gitkeep
-
-# Data (large datasets, keep local only)
-data/raw/
-data/processed/
-data/sumo/
-data/*.csv
-data/*.parquet
-data/*.json
-data/*.tar.gz
-data/*.zip
-data/*.yaml
-!data/.gitkeep
-!data/README.md
-
 # Outputs
 outputs/*
 !outputs/.gitkeep

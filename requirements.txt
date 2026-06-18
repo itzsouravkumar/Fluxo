@@ -10,8 +10,10 @@ fastapi==0.135.1
 uvicorn[standard]==0.42.0
 redis==5.2.0
 sqlalchemy==2.0.0
+asyncpg==0.30.0
 alembic==1.14.0
 pydantic-settings==2.0.0
+python-multipart==0.0.18
 
 # RL
 gymnasium==0.29.0

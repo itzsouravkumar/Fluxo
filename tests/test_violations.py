@@ -156,7 +156,7 @@ def test_violation_detector_init():
     from core.violations.types import ViolationConfig
     config = ViolationConfig(enable_anpr=False, enable_clip_extract=False)
     vd = ViolationDetector(config)
-    assert len(vd._detectors) == 6
+    assert len(vd._detectors) == 9
 
 
 def test_violation_detector_check_empty():
@@ -257,3 +257,128 @@ def test_vlm_evidence_unavailable():
     narration = vlm.narrate(v)
     assert narration is not None
     assert "triple riding" in narration.lower()
+
+
+def test_violation_types_new_entries():
+    from core.violations.types import ViolationType
+    assert ViolationType.MOBILE_PHONE.value == "mobile_phone"
+    assert ViolationType.NO_SEATBELT.value == "no_seatbelt"
+    assert ViolationType.OVERLOADING.value == "overloading"
+
+
+def test_violation_config_new_defaults():
+    from core.violations.types import ViolationConfig
+    config = ViolationConfig()
+    assert config.enable_mobile_phone is True
+    assert config.enable_seatbelt is True
+    assert config.enable_overloading is True
+
+
+def test_mobile_phone_detector_init():
+    from core.violations.mobile_phone import MobilePhoneDetector
+    det = MobilePhoneDetector()
+    assert det.hand_head_threshold == 0.15
+
+
+def test_mobile_phone_no_detections():
+    from core.violations.mobile_phone import MobilePhoneDetector
+    det = MobilePhoneDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[], class_id=[])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_mobile_phone_ignores_non_person():
+    from core.violations.mobile_phone import MobilePhoneDetector
+    det = MobilePhoneDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[[100, 100, 200, 200]], class_id=[2])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_seatbelt_detector_init():
+    from core.violations.seatbelt import SeatbeltDetector
+    det = SeatbeltDetector()
+    assert det is not None
+
+
+def test_seatbelt_no_detections():
+    from core.violations.seatbelt import SeatbeltDetector
+    det = SeatbeltDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[], class_id=[])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_seatbelt_ignores_two_wheeler():
+    from core.violations.seatbelt import SeatbeltDetector
+    det = SeatbeltDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[[100, 100, 200, 300]], class_id=[0])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_seatbelt_checks_lmv():
+    from core.violations.seatbelt import SeatbeltDetector
+    det = SeatbeltDetector()
+    frame = np.zeros((200, 300, 3), dtype=np.uint8)
+    dets = MockDetections(xyxy=[[50, 20, 250, 180]], class_id=[2], tracker_id=[1])
+    result = det.detect(dets, frame, 0)
+    assert len(result) == 1
+    assert result[0].type.value == "no_seatbelt"
+
+
+def test_overloading_detector_init():
+    from core.violations.overloading import OverloadingDetector
+    det = OverloadingDetector()
+    assert det.aspect_ratio_threshold == 1.8
+
+
+def test_overloading_no_detections():
+    from core.violations.overloading import OverloadingDetector
+    det = OverloadingDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[], class_id=[])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_overloading_ignores_car():
+    from core.violations.overloading import OverloadingDetector
+    det = OverloadingDetector()
+    frame = make_frame()
+    dets = MockDetections(xyxy=[[100, 100, 200, 200]], class_id=[2])
+    result = det.detect(dets, frame, 0)
+    assert result == []
+
+
+def test_overloading_checks_bus():
+    from core.violations.overloading import OverloadingDetector
+    det = OverloadingDetector(aspect_ratio_threshold=1.2, density_threshold=0.3)
+    frame = np.random.randint(50, 200, (200, 400, 3), dtype=np.uint8)
+    dets = MockDetections(xyxy=[[50, 50, 350, 180]], class_id=[3], tracker_id=[1])
+    result = det.detect(dets, frame, 0)
+    assert len(result) == 1
+    assert result[0].type.value == "overloading"
+
+
+def test_violation_detector_init_with_new_types():
+    from core.violations import ViolationDetector, ViolationConfig
+    config = ViolationConfig(
+        enable_signal_jump=False,
+        enable_helmet=False,
+        enable_wrong_way=False,
+        enable_triple_riding=False,
+        enable_fancy_plate=False,
+        enable_missing_mirror=False,
+        enable_mobile_phone=True,
+        enable_seatbelt=True,
+        enable_overloading=True,
+        enable_anpr=False,
+    )
+    vd = ViolationDetector(config)
+    assert len(vd._detectors) == 3

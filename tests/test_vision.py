@@ -204,3 +204,113 @@ def test_iou_perfect_overlap():
     box = np.array([10, 20, 30, 40])
     iou = td._compute_iou(box, box)
     assert abs(iou - 1.0) < 1e-6
+
+
+def test_adaptive_confidence_good_quality():
+    from core.vision.enhancement import AdaptiveConfidence
+    ac = AdaptiveConfidence(base_conf=0.4, min_conf=0.15)
+    quality = {"needs_enhancement": False, "overall": 0.8}
+    assert ac.get_threshold(quality) == 0.4
+
+
+def test_adaptive_confidence_terrible_quality():
+    from core.vision.enhancement import AdaptiveConfidence
+    ac = AdaptiveConfidence(base_conf=0.4, min_conf=0.15)
+    quality = {"needs_enhancement": True, "overall": 0.2}
+    assert ac.get_threshold(quality) == 0.15
+
+
+def test_adaptive_confidence_moderate_quality():
+    from core.vision.enhancement import AdaptiveConfidence
+    ac = AdaptiveConfidence(base_conf=0.4, min_conf=0.15)
+    quality = {"needs_enhancement": True, "overall": 0.45}
+    threshold = ac.get_threshold(quality)
+    assert 0.15 <= threshold <= 0.4
+
+
+def test_temporal_booster_no_history():
+    from core.vision.enhancement import TemporalConfidenceBooster
+    tb = TemporalConfidenceBooster(history_window=5, boost_per_hit=0.05)
+    bboxes = [np.array([100, 100, 200, 200])]
+    boosts = tb.update(bboxes)
+    assert len(boosts) == 1
+    assert boosts[0] == 0.0
+
+
+def test_temporal_booster_accumulates():
+    from core.vision.enhancement import TemporalConfidenceBooster
+    tb = TemporalConfidenceBooster(history_window=10, boost_per_hit=0.05, max_boost=0.3)
+    bbox = np.array([100, 100, 200, 200])
+    for _ in range(5):
+        boosts = tb.update([bbox])
+    assert boosts[0] > 0.0
+
+
+def test_temporal_booster_max_boost():
+    from core.vision.enhancement import TemporalConfidenceBooster
+    tb = TemporalConfidenceBooster(history_window=20, boost_per_hit=0.1, max_boost=0.3)
+    bbox = np.array([100, 100, 200, 200])
+    for _ in range(15):
+        boosts = tb.update([bbox])
+    assert boosts[0] <= 0.3
+
+
+def test_temporal_booster_reset():
+    from core.vision.enhancement import TemporalConfidenceBooster
+    tb = TemporalConfidenceBooster()
+    tb.update([np.array([100, 100, 200, 200])])
+    tb.reset()
+    assert len(tb._history) == 0
+
+
+def test_smart_roi_no_motion():
+    from core.vision.enhancement import SmartROISelector
+    selector = SmartROISelector()
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    rois = selector.select_rois(frame, tile_size=640)
+    assert len(rois) == 1
+    assert rois[0] == (0, 0, 640, 480)
+
+
+def test_smart_roi_with_motion():
+    from core.vision.enhancement import SmartROISelector
+    selector = SmartROISelector()
+    frame1 = np.full((480, 640, 3), 128, dtype=np.uint8)
+    selector.select_rois(frame1, tile_size=640)
+    frame2 = frame1.copy()
+    frame2[200:300, 300:500] = 200
+    rois = selector.select_rois(frame2, tile_size=640)
+    assert len(rois) >= 1
+
+
+def test_smart_roi_reset_history():
+    from core.vision.enhancement import SmartROISelector
+    selector = SmartROISelector()
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    selector.select_rois(frame)
+    assert selector._prev_gray is not None
+    selector._prev_gray = None
+    assert selector._prev_gray is None
+
+
+def test_tile_detector_with_rois():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector(tile_size=320, overlap=0.2)
+    frame = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
+
+    def fake_detect(tile, conf):
+        return [{"bbox": np.array([10, 10, 50, 50]), "class_id": 0, "confidence": 0.9}]
+
+    rois = [(0, 0, 640, 640), (640, 0, 1280, 640)]
+    dets = td.detect_with_tiles(frame, fake_detect, rois=rois)
+    assert len(dets) > 0
+
+
+def test_enhancement_init_exports():
+    import core.vision as vmod
+    assert hasattr(vmod, "FrameEnhancer")
+    assert hasattr(vmod, "FrameQualityAnalyzer")
+    assert hasattr(vmod, "TileDetector")
+    assert hasattr(vmod, "AdaptiveConfidence")
+    assert hasattr(vmod, "TemporalConfidenceBooster")
+    assert hasattr(vmod, "SmartROISelector")

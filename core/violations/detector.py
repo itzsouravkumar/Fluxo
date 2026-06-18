@@ -11,6 +11,9 @@ from .wrong_way import WrongWayDetector
 from .triple_riding import TripleRidingDetector
 from .fancy_plate import FancyPlateDetector
 from .mirror import MirrorDetector
+from .mobile_phone import MobilePhoneDetector
+from .seatbelt import SeatbeltDetector
+from .overloading import OverloadingDetector
 from .anpr import ANPRReader
 from .clip_extractor import ClipExtractor
 
@@ -55,6 +58,12 @@ class ViolationDetector:
             self._detectors.append(FancyPlateDetector())
         if self.config.enable_missing_mirror:
             self._detectors.append(MirrorDetector())
+        if self.config.enable_mobile_phone:
+            self._detectors.append(MobilePhoneDetector())
+        if self.config.enable_seatbelt:
+            self._detectors.append(SeatbeltDetector())
+        if self.config.enable_overloading:
+            self._detectors.append(OverloadingDetector())
 
         if self.config.enable_vlm_narration:
             self._init_vlm()

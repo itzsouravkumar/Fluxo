@@ -86,6 +86,9 @@ def load_models():
         enable_triple_riding=True,
         enable_fancy_plate=True,
         enable_missing_mirror=True,
+        enable_mobile_phone=True,
+        enable_seatbelt=True,
+        enable_overloading=True,
         enable_anpr=True,
         enable_clip_extract=False,
         enable_vlm_narration=False,
@@ -143,7 +146,7 @@ def annotate_frame(frame, tracked, violations, density_score, frame_idx, signal_
     return annotated
 
 
-def process_video(source_path, detector, violation_engine, signal_state, night_mode, max_frames=None, enhance_quality=False):
+def process_video(source_path, detector, violation_engine, signal_state, night_mode, max_frames=None, enhance_quality=False, is_live=False):
     import supervision as sv
     from core.vision.config import VEHICLE_CLASSES, DEFAULT_CONFIG
 
@@ -157,17 +160,27 @@ def process_video(source_path, detector, violation_engine, signal_state, night_m
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    st.info(f"Resolution: {width}x{height} | FPS: {fps:.0f} | Frames: {total_frames}")
+    if not is_live:
+        st.info(f"Resolution: {width}x{height} | FPS: {fps:.0f} | Frames: {total_frames}")
 
     enhancer = None
     tile_det = None
+    adaptive_conf = None
+    roi_selector = None
+    temporal_booster = None
     if enhance_quality:
-        from core.vision.enhancement import FrameEnhancer, TileDetector
+        from core.vision.enhancement import (
+            FrameEnhancer, TileDetector, AdaptiveConfidence,
+            TemporalConfidenceBooster, SmartROISelector,
+        )
         enhancer = FrameEnhancer()
         tile_det = TileDetector(tile_size=640, overlap=0.2)
+        adaptive_conf = AdaptiveConfidence(base_conf=DEFAULT_CONFIG.detection.confidence)
+        roi_selector = SmartROISelector()
+        temporal_booster = TemporalConfidenceBooster(history_window=10, boost_per_hit=0.05, max_boost=0.3)
 
     tracker = sv.ByteTrack()
-    progress = st.progress(0)
+    progress = st.progress(0) if not is_live else None
     status_text = st.empty()
     metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
     if enhance_quality:
@@ -190,12 +203,18 @@ def process_video(source_path, detector, violation_engine, signal_state, night_m
         if enhance_quality:
             detections_ultralytics, quality = detector.detect_with_enhancement(
                 frame, enhancer=enhancer, tile_detector=tile_det,
+                adaptive_conf=adaptive_conf, roi_selector=roi_selector,
             )
             dets_for_sv = sv.Detections(
                 xyxy=np.array([d.bbox for d in detections_ultralytics]) if detections_ultralytics else np.empty((0, 4)),
                 confidence=np.array([d.confidence for d in detections_ultralytics]) if detections_ultralytics else np.empty(0),
                 class_id=np.array([d.class_id for d in detections_ultralytics]) if detections_ultralytics else np.empty(0, dtype=int),
             )
+            if temporal_booster and len(dets_for_sv) > 0:
+                bboxes = [d.bbox for d in detections_ultralytics]
+                boosts = temporal_booster.update(bboxes)
+                for i, boost in enumerate(boosts):
+                    dets_for_sv.confidence[i] = min(dets_for_sv.confidence[i] + boost, 1.0)
             with metrics_col5:
                 st.metric("Quality", f"{quality['overall']:.2f}",
                           delta="Enhanced" if quality["needs_enhancement"] else "OK")
@@ -248,19 +267,27 @@ def process_video(source_path, detector, violation_engine, signal_state, night_m
             level = DEFAULT_CONFIG.density_levels.get_level(avg_density)
             st.metric("Density", f"{avg_density:.3f}", delta=level)
 
-        progress.progress(min(frame_count / max(total_frames, 1), 1.0))
         elapsed = time.time() - start_time
-        status_text.text(f"Processing: {frame_count}/{total_frames} | {frame_count/max(elapsed, 0.01):.1f} FPS | Violations: {len(violations_log)}")
+        cur_fps = frame_count / max(elapsed, 0.01)
+        if is_live:
+            status_text.text(f"Live | {cur_fps:.1f} FPS | Violations: {len(violations_log)}")
+        else:
+            progress.progress(min(frame_count / max(total_frames, 1), 1.0))
+            status_text.text(f"Processing: {frame_count}/{total_frames} | {cur_fps:.1f} FPS | Violations: {len(violations_log)}")
 
         frame_count += 1
         if max_frames and frame_count >= max_frames:
             break
 
     cap.release()
-    progress.progress(1.0)
+    if not is_live:
+        progress.progress(1.0)
 
     total_time = time.time() - start_time
-    st.success(f"Processed {frame_count} frames in {total_time:.1f}s ({frame_count/max(total_time, 0.01):.1f} FPS)")
+    if is_live:
+        st.info(f"Stopped after {frame_count} frames ({frame_count/max(total_time, 0.01):.1f} FPS)")
+    else:
+        st.success(f"Processed {frame_count} frames in {total_time:.1f}s ({frame_count/max(total_time, 0.01):.1f} FPS)")
 
     return violations_log
 
@@ -285,10 +312,15 @@ def main():
         - **Triple riding** - counts riders on a two-wheeler using a smarter shape than a simple box
         - **Red light jump** - watches for vehicles crossing the stop line while the light is red
         - **Wrong-way driving** - spots vehicles moving against the expected lane direction
+        - **Mobile phone usage** - catches riders holding a phone to their ear while riding
+        - **Seat belt check** - looks for the diagonal stripe of a seat belt on car occupants
+        - **Overloading** - flags goods vehicles carrying more than they should
         - **Number plate reading** - reads Indian plates even on low-quality CCTV footage
         - **Fancy plate detection** - catches modified or hidden plates that try to dodge cameras
         - **Missing mirror** - flags two-wheelers without rear-view mirrors
         - **Quality enhancement** - when footage is blurry or low-res, it sharpens and upscales before checking
+        - **Far vehicle boost** - lowers the detection threshold and accumulates evidence across frames so far-away vehicles aren't missed
+        - **Smart ROI** - focuses processing on areas with motion instead of scanning the whole frame
         - **Evidence clips** - saves only the few seconds around each violation, not the whole video
         """)
 
@@ -317,6 +349,9 @@ def main():
                         enable_triple_riding=True,
                         enable_fancy_plate=True,
                         enable_missing_mirror=True,
+                        enable_mobile_phone=True,
+                        enable_seatbelt=True,
+                        enable_overloading=True,
                         enable_anpr=True,
                         enable_clip_extract=False,
                         enable_vlm_narration=True,
@@ -356,6 +391,8 @@ def main():
                 camera_source, detector, violation_engine,
                 signal_state, night_mode,
                 max_frames=300,
+                enhance_quality=enhance_quality,
+                is_live=True,
             )
 
     with tab_about:
@@ -381,6 +418,9 @@ def main():
         - **Triple riding** - more than two people on a two-wheeler
         - **Red light jumping** - crossing the stop line while the signal is red
         - **Wrong-way driving** - moving against the expected direction of traffic
+        - **Mobile phone usage** - riders holding a phone to their ear while riding or driving
+        - **No seat belt** - front-seat occupants without seat belts in cars
+        - **Overloading** - goods vehicles carrying more cargo than they should
         - **Fancy or hidden number plates** - modified plates designed to avoid cameras
         - **Missing rear-view mirrors** - two-wheelers without the legally required mirrors
         - **Over-speeding** - when speed data is available from the tracking layer

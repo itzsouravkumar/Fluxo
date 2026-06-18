@@ -13,6 +13,9 @@ class ViolationType(str, Enum):
     FANCY_PLATE = "fancy_plate"
     MISSING_MIRROR = "missing_mirror"
     PEDESTRIAN_BLOCK = "pedestrian_block"
+    MOBILE_PHONE = "mobile_phone"
+    NO_SEATBELT = "no_seatbelt"
+    OVERLOADING = "overloading"
 
 
 @dataclass
@@ -36,6 +39,9 @@ class ViolationConfig:
     enable_triple_riding: bool = True
     enable_fancy_plate: bool = True
     enable_missing_mirror: bool = True
+    enable_mobile_phone: bool = True
+    enable_seatbelt: bool = True
+    enable_overloading: bool = True
     enable_anpr: bool = True
     enable_clip_extract: bool = True
     enable_vlm_narration: bool = False

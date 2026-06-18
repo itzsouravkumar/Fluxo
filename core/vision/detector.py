@@ -73,26 +73,43 @@ class FluxoDetector:
         frame: np.ndarray,
         enhancer=None,
         tile_detector=None,
+        adaptive_conf=None,
+        roi_selector=None,
     ) -> tuple[list[Detection], dict]:
         """Run detection with quality-aware enhancement pipeline.
 
         Auto-detects low-quality footage and applies super-resolution
         + sharpening. Optionally uses tile-based detection for far/small objects.
         Returns detections plus quality metadata.
+
+        Args:
+            frame: Input BGR frame.
+            enhancer: FrameEnhancer instance (created if None).
+            tile_detector: TileDetector instance (created if None).
+            adaptive_conf: AdaptiveConfidence instance for dynamic thresholding.
+            roi_selector: SmartROISelector to focus tile detection on motion areas.
         """
-        from .enhancement import FrameEnhancer, TileDetector
+        from .enhancement import FrameEnhancer, TileDetector, AdaptiveConfidence
 
         if enhancer is None:
             enhancer = FrameEnhancer()
         if tile_detector is None:
             tile_detector = TileDetector(tile_size=640, overlap=0.2)
+        if adaptive_conf is None:
+            adaptive_conf = AdaptiveConfidence(base_conf=self.conf)
 
         enhanced, quality = enhancer.enhance(frame)
 
         if quality.get("needs_enhancement"):
-            def _detect_fn(tile, conf):
+            conf = adaptive_conf.get_threshold(quality)
+
+            rois = None
+            if roi_selector is not None:
+                rois = roi_selector.select_rois(enhanced, tile_size=tile_detector.tile_size)
+
+            def _detect_fn(tile, tile_conf):
                 model = self._load_model()
-                results = model(tile, conf=conf, iou=self.iou, verbose=False)[0]
+                results = model(tile, conf=tile_conf, iou=self.iou, verbose=False)[0]
                 dets = []
                 if results.boxes is not None:
                     for box in results.boxes:
@@ -103,7 +120,7 @@ class FluxoDetector:
                         })
                 return dets
 
-            tile_dets = tile_detector.detect_with_tiles(enhanced, _detect_fn, conf=self.conf)
+            tile_dets = tile_detector.detect_with_tiles(enhanced, _detect_fn, conf=conf, rois=rois)
             detections = [
                 Detection(
                     bbox=d["bbox"],

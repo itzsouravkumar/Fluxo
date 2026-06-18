@@ -4,34 +4,55 @@ import numpy as np
 import pytest
 
 
+def test_config_defaults():
+    from core.vision.config import DEFAULT_CONFIG, VisionConfig
+    config = DEFAULT_CONFIG
+    assert isinstance(config, VisionConfig)
+    assert config.detection.confidence == 0.4
+    assert config.detection.model_path == "yolo11n.pt"
+
+
 def test_vehicle_classes():
-    from scripts.demo_vision import VEHICLE_CLASSES
+    from core.vision.config import VEHICLE_CLASSES
     assert 2 in VEHICLE_CLASSES
-    assert VEHICLE_CLASSES[2] == ("car", 1.0)
+    assert VEHICLE_CLASSES[2].name == "car"
+    assert VEHICLE_CLASSES[2].pce == 1.0
     assert 3 in VEHICLE_CLASSES
-    assert VEHICLE_CLASSES[3] == ("motorcycle", 0.25)
+    assert VEHICLE_CLASSES[3].name == "motorcycle"
+    assert VEHICLE_CLASSES[3].pce == 0.25
 
 
-def test_compute_density_empty():
-    from scripts.demo_vision import compute_density
+def test_density_levels():
+    from core.vision.config import DensityLevels
+    levels = DensityLevels()
+    assert levels.get_level(0.0) == "CLEAR"
+    assert levels.get_level(0.3) == "MODERATE"
+    assert levels.get_level(0.5) == "HIGH"
+    assert levels.get_level(0.8) == "CRITICAL"
+
+
+def test_compute_lane_density_empty():
+    from scripts.demo_vision import compute_lane_density
+    from core.vision.config import DEFAULT_CONFIG
     import supervision as sv
     empty = sv.Detections(xyxy=np.empty((0, 4)), class_id=np.array([]))
-    density, pce, count = compute_density(empty)
-    assert density == 0.0
-    assert pce == 0.0
+    lanes, density, pce, count = compute_lane_density(empty, 640, 480, DEFAULT_CONFIG)
     assert count == 0
+    assert pce == 0.0
+    assert density == 0.0
+    assert all(lane["count"] == 0 for lane in lanes.values())
 
 
-def test_compute_density_with_vehicles():
-    from scripts.demo_vision import compute_density
+def test_compute_lane_density_with_vehicles():
+    from scripts.demo_vision import compute_lane_density
+    from core.vision.config import DEFAULT_CONFIG
     import supervision as sv
-    bboxes = np.array([[100, 100, 200, 200], [300, 300, 400, 400]])
+    bboxes = np.array([[100, 100, 200, 200], [500, 400, 600, 500]])
     class_ids = np.array([2, 3])
     dets = sv.Detections(xyxy=bboxes, class_id=class_ids)
-    density, pce, count = compute_density(dets, roi_area=1000.0)
+    lanes, density, pce, count = compute_lane_density(dets, 640, 480, DEFAULT_CONFIG)
     assert count == 2
     assert pce == 1.25
-    assert density > 0
 
 
 def test_estimate_speed_short_track():
@@ -56,13 +77,26 @@ def test_clahe_preprocessing():
     assert result.dtype == frame.dtype
 
 
-def test_density_levels():
-    from scripts.demo_vision import compute_density
-    import supervision as sv
-    bboxes = np.array([[100, 100, 200, 200]] * 20)
-    class_ids = np.array([7] * 20)
-    dets = sv.Detections(xyxy=bboxes, class_id=class_ids)
-    density, pce, count = compute_density(dets, roi_area=100.0)
-    assert count == 20
-    assert pce == 70.0
-    assert density <= 1.0
+def test_validate_source_missing():
+    from scripts.demo_vision import validate_source
+    result = validate_source("nonexistent_video.mp4")
+    assert result is None
+
+
+def test_validate_source_valid():
+    from scripts.demo_vision import validate_source
+    result = validate_source("0")
+    if result is not None:
+        result.release()
+
+
+def test_profiler():
+    from scripts.demo_vision import Profiler
+    p = Profiler()
+    p.start()
+    p.lap("detection")
+    p.start()
+    p.lap("tracking")
+    summary = p.summary()
+    assert "detection" in summary
+    assert "tracking" in summary

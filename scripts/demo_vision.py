@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """FLUXO Vision Pipeline Demo.
 
-Run on any video file to see YOLOv11 detection + tracking + PCE density + speed estimation.
+Full-featured vision pipeline with:
+- YOLOv11 detection + ByteTrack tracking
+- Lane-wise PCE density scoring (N/S/E/W)
+- Speed estimation per vehicle
+- CLAHE night mode preprocessing
+- Performance profiling
+- JSON results export
 
 Usage:
-    python3 scripts/demo_vision.py --source path/to/video.mp4
-    python3 scripts/demo_vision.py --source 0  # webcam
-    python3 scripts/demo_vision.py --source path/to/video.mp4 --night  # with CLAHE
-    python3 scripts/demo_vision.py --source path/to/video.mp4 --output outputs/demo.mp4 --save-results
+    python3 scripts/demo_vision.py --source video.mp4 --show
+    python3 scripts/demo_vision.py --source video.mp4 --night --save-results
+    python3 scripts/demo_vision.py --source 0 --show  # webcam
 """
 
 import argparse
 import json
+import logging
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -21,24 +28,39 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 
+from core.vision.config import (
+    DEFAULT_CONFIG,
+    VEHICLE_CLASSES,
+    VisionConfig,
+)
 
-VEHICLE_CLASSES = {
-    1: ("bicycle", 0.25),
-    2: ("car", 1.0),
-    3: ("motorcycle", 0.25),
-    5: ("bus", 3.0),
-    7: ("truck", 3.5),
-}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("fluxo.vision")
 
-VEHICLE_COLORS = {
-    1: (0, 255, 255),
-    2: (0, 255, 0),
-    3: (255, 165, 0),
-    5: (255, 0, 0),
-    7: (0, 0, 255),
-}
 
-PIXEL_TO_METER = 0.05
+class Profiler:
+    def __init__(self):
+        self.times = {"detection": [], "tracking": [], "density": [], "total": []}
+
+    def start(self):
+        self._t0 = time.perf_counter()
+
+    def lap(self, name):
+        elapsed = time.perf_counter() - self._t0
+        self.times[name].append(elapsed)
+        self._t0 = time.perf_counter()
+
+    def summary(self):
+        lines = []
+        for name, values in self.times.items():
+            if values:
+                avg = np.mean(values) * 1000
+                lines.append(f"  {name}: {avg:.1f}ms avg")
+        return "\n".join(lines)
 
 
 def apply_clahe(frame, clip_limit=2.0, grid_size=(8, 8)):
@@ -50,24 +72,53 @@ def apply_clahe(frame, clip_limit=2.0, grid_size=(8, 8)):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def compute_density(tracked_detections, roi_area=100.0):
-    total_pce = 0
+def compute_lane_density(tracked, width, height, config: VisionConfig):
+    lanes = {name: {"pce": 0.0, "count": 0} for name in config.lane.names}
+
+    if len(tracked) == 0:
+        return lanes, 0.0, 0.0, 0
+
+    total_pce = 0.0
     vehicle_count = 0
 
-    if len(tracked_detections) == 0:
-        return 0.0, 0.0, 0
+    for i in range(len(tracked)):
+        cls_id = int(tracked.class_id[i]) if tracked.class_id is not None else 0
+        if cls_id not in VEHICLE_CLASSES:
+            continue
 
-    for cls_id in tracked_detections.class_id:
-        if cls_id in VEHICLE_CLASSES:
-            _, pce = VEHICLE_CLASSES[cls_id]
-            total_pce += pce
-            vehicle_count += 1
+        bbox = tracked.xyxy[i]
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
 
-    density = total_pce / max(roi_area, 1.0)
-    return min(density, 1.0), total_pce, vehicle_count
+        vclass = VEHICLE_CLASSES[cls_id]
+        total_pce += vclass.pce
+        vehicle_count += 1
+
+        if cy < height / 2:
+            if cx < width / 2:
+                lane = "north"
+            else:
+                lane = "east"
+        else:
+            if cx < width / 2:
+                lane = "south"
+            else:
+                lane = "west"
+
+        if lane in lanes:
+            lanes[lane]["pce"] += vclass.pce
+            lanes[lane]["count"] += 1
+
+    roi_area = (width * height) / config.density.roi_area_divisor
+    overall_density = min(total_pce / roi_area, 1.0)
+
+    for lane_data in lanes.values():
+        lane_data["density"] = min(lane_data["pce"] / (roi_area * config.lane.roi_ratio), 1.0)
+
+    return lanes, overall_density, total_pce, vehicle_count
 
 
-def estimate_speed(track_history, fps=30.0):
+def estimate_speed(track_history, fps=30.0, pixel_to_meter=0.05):
     if len(track_history) < 5:
         return 0.0
 
@@ -75,7 +126,41 @@ def estimate_speed(track_history, fps=30.0):
     dx = recent[-1][0] - recent[0][0]
     dy = recent[-1][1] - recent[0][1]
     pixel_dist = (dx**2 + dy**2) ** 0.5
-    return (pixel_dist * PIXEL_TO_METER * fps) * 3.6
+    return (pixel_dist * pixel_to_meter * fps) * 3.6
+
+
+def validate_source(source):
+    if source.isdigit():
+        cap = cv2.VideoCapture(int(source))
+    else:
+        path = Path(source)
+        if not path.exists():
+            log.error(f"Video file not found: {source}")
+            return None
+        if path.stat().st_size == 0:
+            log.error(f"Video file is empty: {source}")
+            return None
+        cap = cv2.VideoCapture(str(path))
+
+    if not cap.isOpened():
+        log.error(f"Cannot open video source: {source}")
+        return None
+
+    return cap
+
+
+def validate_model(model_path):
+    path = Path(model_path)
+    if not path.exists():
+        log.warning(f"Model not found at {model_path}, downloading...")
+        try:
+            from ultralytics import YOLO
+            YOLO(model_path)
+            log.info(f"Model downloaded: {model_path}")
+        except Exception as e:
+            log.error(f"Failed to download model: {e}")
+            return False
+    return True
 
 
 def main():
@@ -83,28 +168,32 @@ def main():
     parser.add_argument("--source", required=True, help="Video path or 0 for webcam")
     parser.add_argument("--output", default=None, help="Output video path")
     parser.add_argument("--night", action="store_true", help="Enable CLAHE night mode")
-    parser.add_argument("--conf", type=float, default=0.4, help="Detection confidence")
+    parser.add_argument("--conf", type=float, default=None, help="Detection confidence")
     parser.add_argument("--show", action="store_true", help="Show preview window")
     parser.add_argument("--max-frames", type=int, default=None, help="Max frames to process")
-    parser.add_argument("--save-results", action="store_true", help="Save detection results to JSON")
+    parser.add_argument("--save-results", action="store_true", help="Save results to JSON")
     args = parser.parse_args()
 
+    config = DEFAULT_CONFIG
+    if args.conf is not None:
+        config.detection.confidence = args.conf
+
+    if not validate_model(config.detection.model_path):
+        return
+
+    log.info("Loading YOLOv11 model...")
     try:
         from ultralytics import YOLO
         import supervision as sv
     except ImportError as e:
-        print(f"Missing dependency: {e}")
-        print("Run: pip install ultralytics supervision")
+        log.error(f"Missing dependency: {e}. Run: pip install ultralytics supervision")
         return
 
-    print("Loading YOLOv11n model...")
-    model = YOLO("yolo11n.pt")
+    model = YOLO(config.detection.model_path)
     tracker = sv.ByteTrack()
 
-    source = int(args.source) if args.source.isdigit() else args.source
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        print(f"Error: Cannot open video source: {args.source}")
+    cap = validate_source(args.source)
+    if cap is None:
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -112,11 +201,11 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    print(f"Source: {args.source}")
-    print(f"Resolution: {width}x{height} @ {fps:.1f} FPS")
-    print(f"Total frames: {total_frames}")
-    print(f"Night mode: {'ON' if args.night else 'OFF'}")
-    print("-" * 60)
+    log.info(f"Source: {args.source}")
+    log.info(f"Resolution: {width}x{height} @ {fps:.1f} FPS")
+    log.info(f"Total frames: {total_frames}")
+    log.info(f"Night mode: {'ON' if args.night else 'OFF'}")
+    log.info("-" * 60)
 
     writer = None
     if args.output:
@@ -128,129 +217,154 @@ def main():
     start_time = time.time()
     density_history = []
     track_histories = {}
+    profiler = Profiler()
     results_data = []
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if args.night:
-            frame = apply_clahe(frame)
-
-        results = model(frame, conf=args.conf, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(results)
-
-        vehicle_mask = np.isin(detections.class_id, list(VEHICLE_CLASSES.keys()))
-        vehicle_detections = detections[vehicle_mask]
-
-        if len(vehicle_detections) > 0:
-            tracked = tracker.update_with_detections(vehicle_detections)
-        else:
-            tracked = vehicle_detections
-
-        density_score, total_pce, vehicle_count = compute_density(
-            tracked, roi_area=(width * height) / 1000.0
-        )
-        density_history.append(density_score)
-
-        frame_vehicles = []
-        for i in range(len(tracked)):
-            bbox = tracked.xyxy[i].astype(int)
-            cls_id = int(tracked.class_id[i]) if tracked.class_id is not None else 0
-            conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.0
-            track_id = int(tracked.tracker_id[i]) if tracked.tracker_id is not None else -1
-            color = VEHICLE_COLORS.get(cls_id, (255, 255, 255))
-            name, pce = VEHICLE_CLASSES.get(cls_id, ("unknown", 0))
-
-            cx = (bbox[0] + bbox[2]) // 2
-            cy = (bbox[1] + bbox[3]) // 2
-
-            if track_id not in track_histories:
-                track_histories[track_id] = []
-            track_histories[track_id].append((cx, cy))
-
-            speed = estimate_speed(track_histories[track_id], fps)
-
-            label = f"#{track_id} {name}"
-            speed_label = f"{speed:.0f} km/h"
-
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
-            cv2.putText(frame, label, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            cv2.putText(frame, speed_label, (bbox[0], bbox[3] + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-
-            frame_vehicles.append({
-                "track_id": track_id,
-                "class": name,
-                "confidence": round(conf, 3),
-                "pce": pce,
-                "speed_kmh": round(speed, 1),
-                "bbox": bbox.tolist(),
-            })
-
-        avg_density = np.mean(density_history[-30:]) if density_history else 0
-        level = "CRITICAL" if avg_density > 0.7 else "HIGH" if avg_density > 0.4 else "MODERATE" if avg_density > 0.2 else "CLEAR"
-
-        bar_width = int(avg_density * 200)
-        cv2.rectangle(frame, (10, 130), (210, 150), (50, 50, 50), -1)
-        bar_color = (0, int(255 * (1 - avg_density)), int(255 * avg_density))
-        cv2.rectangle(frame, (10, 130), (10 + bar_width, 150), bar_color, -1)
-
-        info_lines = [
-            f"Frame: {frame_count}",
-            f"Vehicles: {vehicle_count} | PCE: {total_pce:.1f}",
-            f"Density: {avg_density:.3f} ({level})",
-        ]
-
-        for i, line in enumerate(info_lines):
-            cv2.putText(frame, line, (10, 25 + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-
-        if writer:
-            writer.write(frame)
-
-        if args.show:
-            cv2.imshow("FLUXO Vision", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
                 break
 
-        if args.save_results:
-            results_data.append({
-                "frame": frame_count,
-                "density": round(density_score, 4),
-                "pce": round(total_pce, 1),
-                "vehicles": vehicle_count,
-                " detections": frame_vehicles,
-            })
+            profiler.start()
 
-        frame_count += 1
-        if args.max_frames and frame_count >= args.max_frames:
-            break
+            if args.night:
+                frame = apply_clahe(
+                    frame,
+                    clip_limit=config.preprocessor.clahe_clip_limit,
+                    grid_size=config.preprocessor.clahe_grid_size,
+                )
 
-        if frame_count % 100 == 0:
-            elapsed = time.time() - start_time
-            print(f"  {frame_count} frames | {vehicle_count} vehicles | density {avg_density:.3f} | {frame_count / elapsed:.1f} FPS")
+            results = model(frame, conf=config.detection.confidence, verbose=False)[0]
+            detections = sv.Detections.from_ultralytics(results)
+            profiler.lap("detection")
 
-    elapsed = time.time() - start_time
-    print("-" * 60)
-    print(f"Done. {frame_count} frames in {elapsed:.1f}s ({frame_count / elapsed:.1f} FPS)")
-    print(f"Avg density: {np.mean(density_history):.3f}")
-    print(f"Max density: {np.max(density_history):.3f}")
-    print(f"Unique tracks: {len(track_histories)}")
+            vehicle_mask = np.isin(detections.class_id, list(VEHICLE_CLASSES.keys()))
+            vehicle_detections = detections[vehicle_mask]
 
-    cap.release()
-    if writer:
-        writer.release()
-        print(f"Output saved: {args.output}")
+            if len(vehicle_detections) > 0:
+                tracked = tracker.update_with_detections(vehicle_detections)
+            else:
+                tracked = vehicle_detections
+            profiler.lap("tracking")
 
-    if args.save_results and results_data:
-        output_path = Path(args.output).with_suffix(".json") if args.output else "outputs/results.json"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(results_data, f, indent=2)
-        print(f"Results saved: {output_path}")
+            lanes, density_score, total_pce, vehicle_count = compute_lane_density(
+                tracked, width, height, config
+            )
+            density_history.append(density_score)
+            profiler.lap("density")
 
-    if args.show:
-        cv2.destroyAllWindows()
+            frame_vehicles = []
+            for i in range(len(tracked)):
+                bbox = tracked.xyxy[i].astype(int)
+                cls_id = int(tracked.class_id[i]) if tracked.class_id is not None else 0
+                conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.0
+                track_id = int(tracked.tracker_id[i]) if tracked.tracker_id is not None else -1
+
+                if cls_id not in VEHICLE_CLASSES:
+                    continue
+
+                vclass = VEHICLE_CLASSES[cls_id]
+                cx = (bbox[0] + bbox[2]) // 2
+                cy = (bbox[1] + bbox[3]) // 2
+
+                if track_id not in track_histories:
+                    track_histories[track_id] = []
+                track_histories[track_id].append((cx, cy))
+
+                speed = estimate_speed(track_histories[track_id], fps, config.speed.pixel_to_meter)
+
+                label = f"#{track_id} {vclass.name}"
+                speed_label = f"{speed:.0f} km/h"
+
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), vclass.color, 2)
+                cv2.putText(frame, label, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, vclass.color, 2)
+                cv2.putText(frame, speed_label, (bbox[0], bbox[3] + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+
+                frame_vehicles.append({
+                    "track_id": track_id,
+                    "class": vclass.name,
+                    "confidence": round(conf, 3),
+                    "pce": vclass.pce,
+                    "speed_kmh": round(speed, 1),
+                    "bbox": bbox.tolist(),
+                })
+
+            avg_density = np.mean(density_history[-30:]) if density_history else 0
+            level = config.density_levels.get_level(avg_density)
+
+            bar_width = int(avg_density * 200)
+            cv2.rectangle(frame, (10, 130), (210, 150), (50, 50, 50), -1)
+            bar_color = (0, int(255 * (1 - avg_density)), int(255 * avg_density))
+            cv2.rectangle(frame, (10, 130), (10 + bar_width, 150), bar_color, -1)
+
+            info_lines = [
+                f"Frame: {frame_count}",
+                f"Vehicles: {vehicle_count} | PCE: {total_pce:.1f}",
+                f"Density: {avg_density:.3f} ({level})",
+            ]
+
+            for i, line in enumerate(info_lines):
+                cv2.putText(frame, line, (10, 25 + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
+            lane_y = 170
+            for lane_name, lane_data in lanes.items():
+                lane_text = f"{lane_name[0].upper()}: {lane_data['count']}v {lane_data.get('density', 0):.2f}"
+                cv2.putText(frame, lane_text, (10, lane_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+                lane_y += 18
+
+            if writer:
+                writer.write(frame)
+
+            if args.show:
+                cv2.imshow("FLUXO Vision", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+            if args.save_results:
+                results_data.append({
+                    "frame": frame_count,
+                    "density": round(density_score, 4),
+                    "pce": round(total_pce, 1),
+                    "vehicles": vehicle_count,
+                    "lanes": {k: {"count": v["count"], "pce": round(v["pce"], 1)} for k, v in lanes.items()},
+                    "detections": frame_vehicles,
+                })
+
+            frame_count += 1
+            if args.max_frames and frame_count >= args.max_frames:
+                break
+
+            if frame_count % 100 == 0:
+                elapsed = time.time() - start_time
+                log.info(f"  {frame_count} frames | {vehicle_count} vehicles | density {avg_density:.3f} | {frame_count / elapsed:.1f} FPS")
+
+    except KeyboardInterrupt:
+        log.info("Interrupted by user")
+
+    finally:
+        elapsed = time.time() - start_time
+        log.info("-" * 60)
+        log.info(f"Processed {frame_count} frames in {elapsed:.1f}s ({frame_count / elapsed:.1f} FPS)")
+        log.info(f"Avg density: {np.mean(density_history):.3f}")
+        log.info(f"Max density: {np.max(density_history):.3f}")
+        log.info(f"Unique tracks: {len(track_histories)}")
+        log.info(f"Profiling:\n{profiler.summary()}")
+
+        cap.release()
+        if writer:
+            writer.release()
+            log.info(f"Output saved: {args.output}")
+
+        if args.save_results and results_data:
+            output_path = Path(args.output).with_suffix(".json") if args.output else Path("outputs/results.json")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(results_data, f, indent=2)
+            log.info(f"Results saved: {output_path}")
+
+        if args.show:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

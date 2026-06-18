@@ -88,6 +88,7 @@ junctions: dict[str, JunctionState] = {
     "j2": JunctionState("j2", "Gokaldas", 12.9950, 77.6830),
     "j3": JunctionState("j3", "Silk Board", 12.9180, 77.6210),
     "j4": JunctionState("j4", "Hebbal", 13.0350, 77.5970),
+    "j5": JunctionState("j5", "Godda Main Road", 24.8250, 87.2150),
 }
 
 

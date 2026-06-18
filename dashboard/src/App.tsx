@@ -4,6 +4,7 @@ import { SignalPanel } from './components/signal/SignalPanel'
 import { CCTVGrid } from './components/cctv/CCTVGrid'
 import { ViolationFeed } from './components/violations/ViolationFeed'
 import { PredictionStrip } from './components/prediction/PredictionStrip'
+import { FluxoMap } from './components/map/FluxoMap'
 import { useFluxoData } from './hooks/useFluxoData'
 
 function App() {
@@ -16,37 +17,10 @@ function App() {
       <Header />
       <main className="p-4">
         <div className="grid grid-cols-12 gap-4">
-          {/* Junction Overview */}
+          {/* Map */}
           <div className="col-span-8 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
-            <h2 className="text-lg font-semibold mb-4">Junction Overview</h2>
-            <div className="grid grid-cols-2 gap-3">
-              {jList.map((j) => (
-                <div key={j.junction_id} className="bg-gray-900 rounded p-3">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium">{j.name}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      j.congestion_level === 'CRITICAL' ? 'bg-fluxo-red/20 text-fluxo-red' :
-                      j.congestion_level === 'HIGH' ? 'bg-fluxo-yellow/20 text-fluxo-yellow' :
-                      'bg-fluxo-green/20 text-fluxo-green'
-                    }`}>
-                      {j.congestion_level || 'CLEAR'}
-                    </span>
-                  </div>
-                  <div className="text-2xl font-mono text-fluxo-green mb-1">
-                    {j.signal_phase || 'N-S'} {j.signal_state || 'GREEN'} {j.signal_remaining || 0}s
-                  </div>
-                  <div className="flex justify-between text-xs text-gray-500">
-                    <span>{j.vehicle_count || 0} vehicles</span>
-                    <span>Density: {(j.density_score || 0).toFixed(2)}</span>
-                  </div>
-                  {j.rl_recommendation?.duration_s > 0 && (
-                    <div className="text-xs text-fluxo-accent mt-1">
-                      RL: {j.rl_recommendation.duration_s}s
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+            <h2 className="text-lg font-semibold mb-4">Live Junction Map</h2>
+            <FluxoMap junctions={junctions} />
           </div>
 
           {/* Signal Controller Panel */}

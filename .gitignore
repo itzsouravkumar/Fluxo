@@ -21,11 +21,18 @@ models/*.onnx
 models/*.zip
 !models/.gitkeep
 
-# Data
+# Data (large datasets, keep local only)
+data/raw/
+data/processed/
+data/sumo/
 data/*.csv
 data/*.parquet
 data/*.json
+data/*.tar.gz
+data/*.zip
+data/*.yaml
 !data/.gitkeep
+!data/README.md
 
 # Outputs
 outputs/*
@@ -41,6 +48,11 @@ outputs/*
 .DS_Store
 Thumbs.db
 
+# User-specific local docs
+CityPulse_Gridlock_Hackathon_Research_Brief.pdf
+datasetsReference.md
+fluxo.md
+
 # Node
 node_modules/
 dashboard/dist/
@@ -53,6 +65,12 @@ dashboard/.vite/
 core/rl/sumo/*.sumocfg
 core/rl/sumo/*.net.xml
 core/rl/sumo/*.rou.xml
+
+# Large archives
+*.tar.gz
+*.zip
+*.rar
+*.7z
 
 # Evidence clips
 clips/

@@ -5,6 +5,9 @@ Full-featured vision pipeline with:
 - YOLOv11 detection + ByteTrack tracking
 - Lane-wise PCE density scoring (N/S/E/W)
 - Speed estimation per vehicle
+- Violation detection (signal jump, helmet, wrong way, triple riding)
+- ANPR (license plate recognition)
+- Evidence clip extraction
 - CLAHE night mode preprocessing
 - Performance profiling
 - JSON results export
@@ -12,6 +15,7 @@ Full-featured vision pipeline with:
 Usage:
     python3 scripts/demo_vision.py --source video.mp4 --show
     python3 scripts/demo_vision.py --source video.mp4 --night --save-results
+    python3 scripts/demo_vision.py --source video.mp4 --violations --signal RED --show
     python3 scripts/demo_vision.py --source 0 --show  # webcam
 """
 
@@ -33,6 +37,7 @@ from core.vision.config import (
     VEHICLE_CLASSES,
     VisionConfig,
 )
+from core.violations import ViolationDetector, ViolationConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +49,7 @@ log = logging.getLogger("fluxo.vision")
 
 class Profiler:
     def __init__(self):
-        self.times = {"detection": [], "tracking": [], "density": [], "total": []}
+        self.times = {"detection": [], "tracking": [], "violations": [], "density": [], "total": []}
 
     def start(self):
         self._t0 = time.perf_counter()
@@ -172,6 +177,9 @@ def main():
     parser.add_argument("--show", action="store_true", help="Show preview window")
     parser.add_argument("--max-frames", type=int, default=None, help="Max frames to process")
     parser.add_argument("--save-results", action="store_true", help="Save results to JSON")
+    parser.add_argument("--violations", action="store_true", help="Enable violation detection")
+    parser.add_argument("--signal", default="GREEN", choices=["RED", "YELLOW", "GREEN"], help="Simulated signal state")
+    parser.add_argument("--anpr", action="store_true", help="Enable ANPR (requires easyocr)")
     args = parser.parse_args()
 
     config = DEFAULT_CONFIG
@@ -191,6 +199,15 @@ def main():
 
     model = YOLO(config.detection.model_path)
     tracker = sv.ByteTrack()
+
+    violation_detector = None
+    if args.violations:
+        vconfig = ViolationConfig(
+            enable_anpr=args.anpr,
+            enable_clip_extract=True,
+        )
+        violation_detector = ViolationDetector(vconfig)
+        log.info(f"Violation detection: ON (signal={args.signal}, anpr={args.anpr})")
 
     cap = validate_source(args.source)
     if cap is None:
@@ -217,6 +234,7 @@ def main():
     start_time = time.time()
     density_history = []
     track_histories = {}
+    unique_vehicles = set()
     profiler = Profiler()
     results_data = []
 
@@ -248,6 +266,14 @@ def main():
                 tracked = vehicle_detections
             profiler.lap("tracking")
 
+            violations = []
+            if violation_detector is not None:
+                violation_detector.feed_frame(frame)
+                violations = violation_detector.check(
+                    tracked, frame, frame_count, args.signal
+                )
+            profiler.lap("violations")
+
             lanes, density_score, total_pce, vehicle_count = compute_lane_density(
                 tracked, width, height, config
             )
@@ -267,6 +293,9 @@ def main():
                 vclass = VEHICLE_CLASSES[cls_id]
                 cx = (bbox[0] + bbox[2]) // 2
                 cy = (bbox[1] + bbox[3]) // 2
+
+                if track_id > 0:
+                    unique_vehicles.add(track_id)
 
                 if track_id not in track_histories:
                     track_histories[track_id] = []
@@ -290,6 +319,15 @@ def main():
                     "bbox": bbox.tolist(),
                 })
 
+            for v in violations:
+                vb = v.bbox
+                cv2.rectangle(frame, (vb[0], vb[1]), (vb[2], vb[3]), (0, 0, 255), 3)
+                vlabel = v.type.value.upper()
+                if v.plate_number:
+                    vlabel += f" [{v.plate_number}]"
+                cv2.putText(frame, vlabel, (vb[0], vb[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.putText(frame, f"{v.confidence:.0%}", (vb[0], vb[3] + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
             avg_density = np.mean(density_history[-30:]) if density_history else 0
             level = config.density_levels.get_level(avg_density)
 
@@ -300,8 +338,9 @@ def main():
 
             info_lines = [
                 f"Frame: {frame_count}",
-                f"Vehicles: {vehicle_count} | PCE: {total_pce:.1f}",
-                f"Density: {avg_density:.3f} ({level})",
+                f"Vehicles: {vehicle_count} | Unique: {len(unique_vehicles)}",
+                f"PCE: {total_pce:.1f} | Density: {avg_density:.3f} ({level})",
+                f"Violations: {len(violations)} | Signal: {args.signal}",
             ]
 
             for i, line in enumerate(info_lines):
@@ -322,11 +361,22 @@ def main():
                     break
 
             if args.save_results:
+                frame_violations = [
+                    {
+                        "type": v.type.value,
+                        "track_id": v.track_id,
+                        "confidence": round(v.confidence, 3),
+                        "plate": v.plate_number,
+                        "clip": v.clip_path,
+                    }
+                    for v in violations
+                ]
                 results_data.append({
                     "frame": frame_count,
                     "density": round(density_score, 4),
                     "pce": round(total_pce, 1),
                     "vehicles": vehicle_count,
+                    "violations": frame_violations,
                     "lanes": {k: {"count": v["count"], "pce": round(v["pce"], 1)} for k, v in lanes.items()},
                     "detections": frame_vehicles,
                 })
@@ -348,7 +398,15 @@ def main():
         log.info(f"Processed {frame_count} frames in {elapsed:.1f}s ({frame_count / elapsed:.1f} FPS)")
         log.info(f"Avg density: {np.mean(density_history):.3f}")
         log.info(f"Max density: {np.max(density_history):.3f}")
-        log.info(f"Unique tracks: {len(track_histories)}")
+        log.info(f"Unique vehicles seen: {len(unique_vehicles)}")
+        if violation_detector is not None:
+            all_violations = [v for frame_data in results_data for v in frame_data.get("violations", [])]
+            log.info(f"Total violations detected: {len(all_violations)}")
+            vtypes = {}
+            for v in all_violations:
+                vtypes[v["type"]] = vtypes.get(v["type"], 0) + 1
+            for vtype, count in vtypes.items():
+                log.info(f"  {vtype}: {count}")
         log.info(f"Profiling:\n{profiler.summary()}")
 
         cap.release()
@@ -359,8 +417,14 @@ def main():
         if args.save_results and results_data:
             output_path = Path(args.output).with_suffix(".json") if args.output else Path("outputs/results.json")
             output_path.parent.mkdir(parents=True, exist_ok=True)
+            summary = {
+                "total_frames": frame_count,
+                "unique_vehicles": len(unique_vehicles),
+                "avg_density": round(float(np.mean(density_history)), 4),
+                "max_density": round(float(np.max(density_history)), 4),
+            }
             with open(output_path, "w") as f:
-                json.dump(results_data, f, indent=2)
+                json.dump({"summary": summary, "frames": results_data}, f, indent=2)
             log.info(f"Results saved: {output_path}")
 
         if args.show:

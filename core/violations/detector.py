@@ -1,36 +1,92 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
+import numpy as np
 
-
-class ViolationType(str, Enum):
-    NO_HELMET = "no_helmet"
-    SIGNAL_JUMP = "signal_jump"
-    WRONG_WAY = "wrong_way"
-    TRIPLE_RIDING = "triple_riding"
-    PEDESTRIAN_BLOCK = "pedestrian_block"
-    OVERSPEEDING = "overspeeding"
-
-
-@dataclass
-class ViolationEvent:
-    type: ViolationType
-    track_id: int
-    frame: int
-    confidence: float
-    plate_number: str | None = None
-    clip_path: str | None = None
+from .types import ViolationType, ViolationEvent, ViolationConfig
+from .signal_jump import SignalJumpDetector
+from .helmet import HelmetDetector
+from .wrong_way import WrongWayDetector
+from .triple_riding import TripleRidingDetector
+from .anpr import ANPRReader
+from .clip_extractor import ClipExtractor
 
 
 class ViolationDetector:
     """Orchestrates all violation detection sub-modules."""
 
-    def __init__(self):
+    def __init__(self, config: ViolationConfig | None = None):
+        self.config = config or ViolationConfig()
         self._detectors = []
+        self._anpr = ANPRReader() if self.config.enable_anpr else None
+        self._clip_extractor = ClipExtractor() if self.config.enable_clip_extract else None
+        self._ring_buffer: list[np.ndarray] = []
+        self._ring_buffer_max = 300
 
-    def check(self, tracks, frame, signal_state: str) -> list[ViolationEvent]:
+        if self.config.enable_signal_jump:
+            self._detectors.append(SignalJumpDetector(self.config.stop_line_y))
+        if self.config.enable_helmet:
+            self._detectors.append(HelmetDetector())
+        if self.config.enable_wrong_way:
+            self._detectors.append(WrongWayDetector())
+        if self.config.enable_triple_riding:
+            self._detectors.append(TripleRidingDetector())
+
+    def feed_frame(self, frame: np.ndarray):
+        if len(self._ring_buffer) >= self._ring_buffer_max:
+            self._ring_buffer.pop(0)
+        self._ring_buffer.append(frame.copy())
+
+    def check(
+        self,
+        detections,
+        frame: np.ndarray,
+        frame_idx: int,
+        signal_state: str = "GREEN",
+    ) -> list[ViolationEvent]:
         violations = []
         for detector in self._detectors:
-            violations.extend(detector.detect(tracks, frame, signal_state))
+            violations.extend(detector.detect(detections, frame, frame_idx, signal_state))
+
+        if self._anpr:
+            for v in violations:
+                plate = self._read_plate(detections, frame, v.track_id)
+                if plate:
+                    v.plate_number = plate
+
+        if self._clip_extractor and violations and self._ring_buffer:
+            for v in violations:
+                clip_path = self._clip_extractor.extract(
+                    self._ring_buffer,
+                    len(self._ring_buffer) - 1,
+                    f"outputs/clips/{v.type.value}_{v.track_id}_f{frame_idx}.mp4",
+                    pre_seconds=self.config.clip_pre_seconds,
+                    post_seconds=self.config.clip_post_seconds,
+                )
+                if clip_path:
+                    v.clip_path = str(clip_path)
+
         return violations
+
+    def _read_plate(self, detections, frame: np.ndarray, track_id: int) -> str | None:
+        if self._anpr is None:
+            return None
+        if not hasattr(detections, "tracker_id") or detections.tracker_id is None:
+            return None
+        for i in range(len(detections)):
+            tid = int(detections.tracker_id[i]) if detections.tracker_id is not None else -1
+            if tid != track_id:
+                continue
+            bbox = detections.xyxy[i].astype(int)
+            x1, y1, x2, y2 = bbox
+            h_frame, w_frame = frame.shape[:2]
+            x1 = max(0, min(x1, w_frame - 1))
+            x2 = max(0, min(x2, w_frame))
+            y1 = max(0, min(y1, h_frame - 1))
+            y2 = max(0, min(y2, h_frame))
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            plate = self._anpr.read_plate(crop)
+            if plate:
+                return plate
+        return None

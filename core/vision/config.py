@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class DetectionConfig:
-    model_path: str = "yolo11n.pt"
+    model_path: str = "yolo26n.pt"
     confidence: float = 0.4
     iou_threshold: float = 0.5
     device: str = "auto"
@@ -23,14 +23,6 @@ class VehicleClass:
 
 
 VEHICLE_CLASSES = {
-    1: VehicleClass(1, "bicycle", 0.25, (0, 255, 255)),
-    2: VehicleClass(2, "car", 1.0, (0, 255, 0)),
-    3: VehicleClass(3, "motorcycle", 0.25, (255, 165, 0)),
-    5: VehicleClass(5, "bus", 3.0, (255, 0, 0)),
-    7: VehicleClass(7, "truck", 3.5, (0, 0, 255)),
-}
-
-INDIAN_VEHICLE_CLASSES = {
     0: VehicleClass(0, "two_wheeler", 0.25, (255, 165, 0)),
     1: VehicleClass(1, "auto_rickshaw", 0.5, (0, 255, 255)),
     2: VehicleClass(2, "light_motor_vehicle", 1.0, (0, 255, 0)),

@@ -15,9 +15,9 @@ class FramePreprocessor:
 
     def apply_clahe(self, frame: np.ndarray) -> np.ndarray:
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        l = self.clahe.apply(l)
-        lab = cv2.merge([l, a, b])
+        lightness, a_ch, b_ch = cv2.split(lab)
+        lightness = self.clahe.apply(lightness)
+        lab = cv2.merge([lightness, a_ch, b_ch])
         return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     def resize(self, frame: np.ndarray) -> np.ndarray:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 
@@ -22,6 +23,3 @@ class HomographyCalibrator:
         projected = self.H @ pt
         projected /= projected[2]
         return projected[:2]
-
-
-import cv2

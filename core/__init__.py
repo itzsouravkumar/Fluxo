@@ -1,3 +1,3 @@
-"""FLUXO: Adaptive Urban Traffic Intelligence Platform."""
+"""FLUXO: Automated Photo Identification and Classification for Traffic Violations."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

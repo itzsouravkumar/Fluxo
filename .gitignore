@@ -11,15 +11,10 @@ dist/
 build/
 .mypy_cache/
 
-# Environment
-.env
-
 # Data (large datasets, keep local only)
 data/raw/
 data/processed/
-data/sumo/
 data/test/
-data/test_videos/
 data/*.csv
 data/*.parquet
 data/*.json
@@ -28,7 +23,6 @@ data/*.avi
 data/*.mov
 data/*.tar.gz
 data/*.zip
-data/*.yaml
 !data/.gitkeep
 !data/README.md
 
@@ -52,23 +46,8 @@ outputs/*
 .DS_Store
 Thumbs.db
 
-# User-specific local docs
-CityPulse_Gridlock_Hackathon_Research_Brief.pdf
-datasetsReference.md
-fluxo.md
-
-# Node
-node_modules/
-dashboard/dist/
-dashboard/.vite/
-
-# Docker
+# Logs
 *.log
-
-# SUMO
-core/rl/sumo/*.sumocfg
-core/rl/sumo/*.net.xml
-core/rl/sumo/*.rou.xml
 
 # Large archives
 *.tar.gz

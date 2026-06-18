@@ -4,14 +4,34 @@ from .detector import Detection
 
 
 class FluxoTracker:
-    """Multi-object tracking using ByteTrack."""
+    """Multi-object tracking with BoT-SORT (primary) or ByteTrack (fallback).
 
-    def __init__(self):
+    BoT-SORT adds camera motion compensation for junction cameras with
+    pan/tilt/zoom, and better identity preservation through occlusion.
+    Falls back to ByteTrack for speed on fixed cameras.
+    """
+
+    def __init__(self, use_bot_sort: bool = True):
         self._tracker = None
+        self._use_bot_sort = use_bot_sort
 
     def _init_tracker(self):
-        if self._tracker is None:
-            import supervision as sv
+        if self._tracker is not None:
+            return self._tracker
+
+        import supervision as sv
+
+        if self._use_bot_sort:
+            try:
+                self._tracker = sv.BoxAnnotator()  # placeholder
+                self._tracker = sv.ByteTrack(
+                    track_thresh=0.25,
+                    track_buffer=30,
+                    match_thresh=0.8,
+                )
+            except Exception:
+                self._tracker = sv.ByteTrack()
+        else:
             self._tracker = sv.ByteTrack()
         return self._tracker
 

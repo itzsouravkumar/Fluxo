@@ -15,7 +15,11 @@ class Detection:
 
 
 class FluxoDetector:
-    """YOLOv11 inference wrapper for Indian traffic vehicle detection."""
+    """YOLO26 inference wrapper for Indian traffic vehicle detection.
+
+    Uses YOLO26 (NMS-free design) for single-pass unified detection.
+    One detection pass drives all violation classifiers via shared track IDs.
+    """
 
     CLASSES = {
         0: "two_wheeler",
@@ -37,7 +41,7 @@ class FluxoDetector:
         6: 0.0,
     }
 
-    def __init__(self, model_path: str | Path = "yolo11n.pt", conf: float = 0.4, iou: float = 0.5):
+    def __init__(self, model_path: str | Path = "yolo26n.pt", conf: float = 0.4, iou: float = 0.5):
         self.model_path = model_path
         self.conf = conf
         self.iou = iou

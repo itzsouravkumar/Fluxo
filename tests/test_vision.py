@@ -1,7 +1,6 @@
 """Tests for FLUXO vision module."""
 
 import numpy as np
-import pytest
 
 
 def test_config_defaults():
@@ -9,17 +8,17 @@ def test_config_defaults():
     config = DEFAULT_CONFIG
     assert isinstance(config, VisionConfig)
     assert config.detection.confidence == 0.4
-    assert config.detection.model_path == "yolo11n.pt"
+    assert config.detection.model_path == "yolo26n.pt"
 
 
 def test_vehicle_classes():
     from core.vision.config import VEHICLE_CLASSES
+    assert 0 in VEHICLE_CLASSES
+    assert VEHICLE_CLASSES[0].name == "two_wheeler"
+    assert VEHICLE_CLASSES[0].pce == 0.25
     assert 2 in VEHICLE_CLASSES
-    assert VEHICLE_CLASSES[2].name == "car"
+    assert VEHICLE_CLASSES[2].name == "light_motor_vehicle"
     assert VEHICLE_CLASSES[2].pce == 1.0
-    assert 3 in VEHICLE_CLASSES
-    assert VEHICLE_CLASSES[3].name == "motorcycle"
-    assert VEHICLE_CLASSES[3].pce == 0.25
 
 
 def test_density_levels():
@@ -52,7 +51,7 @@ def test_compute_lane_density_with_vehicles():
     dets = sv.Detections(xyxy=bboxes, class_id=class_ids)
     lanes, density, pce, count = compute_lane_density(dets, 640, 480, DEFAULT_CONFIG)
     assert count == 2
-    assert pce == 1.25
+    assert pce == 4.0
 
 
 def test_estimate_speed_short_track():
@@ -100,3 +99,16 @@ def test_profiler():
     summary = p.summary()
     assert "detection" in summary
     assert "tracking" in summary
+
+
+def test_detector_init():
+    from core.vision.detector import FluxoDetector
+    det = FluxoDetector(model_path="yolo26n.pt")
+    assert det.model_path == "yolo26n.pt"
+    assert det.conf == 0.4
+
+
+def test_tracker_init():
+    from core.vision.tracker import FluxoTracker
+    tracker = FluxoTracker()
+    assert tracker._tracker is None

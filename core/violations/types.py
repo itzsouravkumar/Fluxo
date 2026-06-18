@@ -9,7 +9,6 @@ class ViolationType(str, Enum):
     SIGNAL_JUMP = "signal_jump"
     WRONG_WAY = "wrong_way"
     TRIPLE_RIDING = "triple_riding"
-    PEDESTRIAN_BLOCK = "pedestrian_block"
     OVERSPEEDING = "overspeeding"
 
 
@@ -22,6 +21,7 @@ class ViolationEvent:
     plate_number: str | None = None
     clip_path: str | None = None
     bbox: tuple = (0, 0, 0, 0)
+    seat_positions: dict | None = None
 
 
 @dataclass

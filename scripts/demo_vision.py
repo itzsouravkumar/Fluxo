@@ -2,7 +2,7 @@
 """FLUXO Vision Pipeline Demo.
 
 Full-featured vision pipeline with:
-- YOLOv11 detection + ByteTrack tracking
+- YOLO26 detection + ByteTrack tracking (single-pass unified detection)
 - Lane-wise PCE density scoring (N/S/E/W)
 - Speed estimation per vehicle
 - Violation detection (signal jump, helmet, wrong way, triple riding)
@@ -10,7 +10,6 @@ Full-featured vision pipeline with:
 - Evidence clip extraction
 - CLAHE night mode preprocessing
 - Performance profiling
-- JSON results export
 
 Usage:
     python3 scripts/demo_vision.py --source video.mp4 --show
@@ -99,15 +98,9 @@ def compute_lane_density(tracked, width, height, config: VisionConfig):
         vehicle_count += 1
 
         if cy < height / 2:
-            if cx < width / 2:
-                lane = "north"
-            else:
-                lane = "east"
+            lane = "north" if cx < width / 2 else "east"
         else:
-            if cx < width / 2:
-                lane = "south"
-            else:
-                lane = "west"
+            lane = "south" if cx < width / 2 else "west"
 
         if lane in lanes:
             lanes[lane]["pce"] += vclass.pce
@@ -188,7 +181,7 @@ def main():
     if not validate_model(config.detection.model_path):
         return
 
-    log.info("Loading YOLOv11 model...")
+    log.info("Loading YOLO26 model (NMS-free, end-to-end detection)...")
     try:
         from ultralytics import YOLO
         import supervision as sv

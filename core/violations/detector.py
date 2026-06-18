@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from .types import ViolationEvent, ViolationConfig
+from .types import ViolationEvent
 from .signal_jump import SignalJumpDetector
 from .helmet import HelmetDetector
 from .wrong_way import WrongWayDetector
@@ -10,11 +12,21 @@ from .triple_riding import TripleRidingDetector
 from .anpr import ANPRReader
 from .clip_extractor import ClipExtractor
 
+if TYPE_CHECKING:
+    from .types import ViolationConfig
+
 
 class ViolationDetector:
-    """Orchestrates all violation detection sub-modules."""
+    """Orchestrates all violation detection sub-modules.
+
+    Uses a single detection+tracking pass to drive all violation checks.
+    Every classifier reads from the same per-vehicle track ID, so one
+    detection+tracking pass drives all five violation checks instead of
+    five separate inference calls per frame.
+    """
 
     def __init__(self, config: ViolationConfig | None = None):
+        from .types import ViolationConfig
         self.config = config or ViolationConfig()
         self._detectors = []
         self._anpr = ANPRReader() if self.config.enable_anpr else None

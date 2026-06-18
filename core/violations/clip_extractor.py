@@ -33,7 +33,6 @@ class ClipExtractor:
 
     def _write_clip(self, frames: list, output_path: Path):
         import cv2
-        import numpy as np
 
         if not frames:
             return

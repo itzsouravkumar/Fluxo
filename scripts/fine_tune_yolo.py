@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fine-tune YOLOv11 on IDD (Indian Driving Dataset) for Indian traffic classes.
+"""Fine-tune YOLO26 on IDD (Indian Driving Dataset) for Indian traffic classes.
 
-Converts IDD annotations to YOLO format and trains YOLOv11n.
+Converts IDD annotations to YOLO format and trains YOLO26n.
 
 Usage:
     python3 scripts/fine_tune_yolo.py --data data/raw/IDD_Detection --epochs 50
@@ -153,12 +153,12 @@ def train_model(data_yaml, epochs=50, batch_size=16, img_size=640):
         log.error("ultralytics not installed. Run: pip install ultralytics")
         return None
 
-    log.info("Starting YOLOv11 fine-tuning on IDD...")
+    log.info("Starting YOLO26 fine-tuning on IDD...")
     log.info(f"  Epochs: {epochs}")
     log.info(f"  Batch size: {batch_size}")
     log.info(f"  Image size: {img_size}")
 
-    model = YOLO("yolo11n.pt")
+    model = YOLO("yolo26n.pt")
 
     results = model.train(
         data=str(data_yaml),
@@ -173,7 +173,7 @@ def train_model(data_yaml, epochs=50, batch_size=16, img_size=640):
 
     best_model = Path("runs/detect/fluxo_indian_traffic/weights/best.pt")
     if best_model.exists():
-        output = Path("models/yolo11n_indian_traffic.pt")
+        output = Path("models/yolo26n_indian_traffic.pt")
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(best_model, output)
         log.info(f"Best model saved: {output}")
@@ -184,7 +184,7 @@ def train_model(data_yaml, epochs=50, batch_size=16, img_size=640):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune YOLOv11 on IDD dataset")
+    parser = argparse.ArgumentParser(description="Fine-tune YOLO26 on IDD dataset")
     parser.add_argument("--data", default="data/raw/IDD_Detection", help="IDD dataset path")
     parser.add_argument("--output", default="data/processed/idd_yolo", help="Output path for YOLO format")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
@@ -193,7 +193,7 @@ def main():
     parser.add_argument("--convert-only", action="store_true", help="Only convert annotations, don't train")
     args = parser.parse_args()
 
-    log.info("FLUXO YOLO Fine-tuning on IDD")
+    log.info("FLUXO YOLO26 Fine-tuning on IDD")
     log.info("=" * 50)
 
     if not Path(args.data).exists():

@@ -112,3 +112,95 @@ def test_tracker_init():
     from core.vision.tracker import FluxoTracker
     tracker = FluxoTracker()
     assert tracker._tracker is None
+
+
+def test_frame_quality_analyzer_good_frame():
+    from core.vision.enhancement import FrameQualityAnalyzer
+    analyzer = FrameQualityAnalyzer(min_resolution=480, blur_threshold=100.0)
+    frame = np.random.randint(50, 200, (720, 1280, 3), dtype=np.uint8)
+    q = analyzer.analyze(frame)
+    assert 0.0 <= q["overall"] <= 1.0
+    assert "needs_enhancement" in q
+    assert "needs_sr" in q
+    assert "needs_sharpen" in q
+
+
+def test_frame_quality_analyzer_bad_frame():
+    from core.vision.enhancement import FrameQualityAnalyzer
+    analyzer = FrameQualityAnalyzer(min_resolution=480, blur_threshold=100.0)
+    frame = np.random.randint(0, 255, (120, 160, 3), dtype=np.uint8)
+    q = analyzer.analyze(frame)
+    assert q["needs_enhancement"] is True or q["needs_sr"] is True
+
+
+def test_frame_enhancer_noop_for_good_frame():
+    from core.vision.enhancement import FrameEnhancer
+    enhancer = FrameEnhancer()
+    frame = np.random.randint(50, 200, (720, 1280, 3), dtype=np.uint8)
+    result, quality = enhancer.enhance(frame)
+    assert result.shape == frame.shape
+
+
+def test_frame_enhancer_upscales_bad_frame():
+    from core.vision.enhancement import FrameEnhancer
+    enhancer = FrameEnhancer()
+    frame = np.random.randint(0, 255, (120, 160, 3), dtype=np.uint8)
+    result, quality = enhancer.enhance(frame, force=True)
+    assert result.shape[0] >= frame.shape[0]
+    assert result.shape[1] >= frame.shape[1]
+
+
+def test_super_resolution_upscaler():
+    from core.vision.enhancement import SuperResolutionUpscaler
+    sr = SuperResolutionUpscaler(scale=2)
+    frame = np.random.randint(0, 255, (120, 160, 3), dtype=np.uint8)
+    result = sr.upscale(frame)
+    assert result.shape[0] == 240
+    assert result.shape[1] == 320
+
+
+def test_tile_detector_small_frame():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector(tile_size=640, overlap=0.2)
+    frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+    dets = td.detect_with_tiles(frame, lambda t, c: [])
+    assert isinstance(dets, list)
+
+
+def test_tile_detector_large_frame():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector(tile_size=320, overlap=0.2)
+    frame = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
+
+    def fake_detect(tile, conf):
+        h, w = tile.shape[:2]
+        return [{"bbox": np.array([10, 10, 50, 50]), "class_id": 0, "confidence": 0.9}]
+
+    dets = td.detect_with_tiles(frame, fake_detect)
+    assert len(dets) > 0
+
+
+def test_iou_computation():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector()
+    box1 = np.array([0, 0, 100, 100])
+    box2 = np.array([50, 50, 150, 150])
+    iou = td._compute_iou(box1, box2)
+    assert 0.0 < iou < 1.0
+
+
+def test_iou_no_overlap():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector()
+    box1 = np.array([0, 0, 10, 10])
+    box2 = np.array[0] if False else np.array([100, 100, 200, 200])
+    iou = td._compute_iou(box1, box2)
+    assert iou == 0.0
+
+
+def test_iou_perfect_overlap():
+    from core.vision.enhancement import TileDetector
+    td = TileDetector()
+    box = np.array([10, 20, 30, 40])
+    iou = td._compute_iou(box, box)
+    assert abs(iou - 1.0) < 1e-6

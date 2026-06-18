@@ -32,6 +32,7 @@ class FancyPlateDetector:
         detections,
         frame: np.ndarray,
         frame_idx: int,
+        signal_state: str = "GREEN",
         ocr_results: dict[int, tuple[str | None, float]] | None = None,
     ) -> list[ViolationEvent]:
         violations = []

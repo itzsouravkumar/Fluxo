@@ -4,8 +4,11 @@ from .signal_jump import SignalJumpDetector
 from .helmet import HelmetDetector
 from .wrong_way import WrongWayDetector
 from .triple_riding import TripleRidingDetector
+from .fancy_plate import FancyPlateDetector
+from .mirror import MirrorDetector
 from .anpr import ANPRReader
 from .clip_extractor import ClipExtractor
+from .vlm_evidence import VLMEvidenceLayer
 
 __all__ = [
     "ViolationType",
@@ -16,6 +19,9 @@ __all__ = [
     "HelmetDetector",
     "WrongWayDetector",
     "TripleRidingDetector",
+    "FancyPlateDetector",
+    "MirrorDetector",
     "ANPRReader",
     "ClipExtractor",
+    "VLMEvidenceLayer",
 ]

@@ -2,6 +2,7 @@ from .config import VisionConfig, DEFAULT_CONFIG, VEHICLE_CLASSES
 from .detector import FluxoDetector
 from .tracker import FluxoTracker
 from .preprocessor import FramePreprocessor
+from .enhancement import FrameEnhancer, FrameQualityAnalyzer, TileDetector
 
 __all__ = [
     "VisionConfig",
@@ -10,4 +11,7 @@ __all__ = [
     "FluxoDetector",
     "FluxoTracker",
     "FramePreprocessor",
+    "FrameEnhancer",
+    "FrameQualityAnalyzer",
+    "TileDetector",
 ]

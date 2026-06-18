@@ -26,6 +26,8 @@ def test_violation_types():
     assert ViolationType.SIGNAL_JUMP.value == "signal_jump"
     assert ViolationType.WRONG_WAY.value == "wrong_way"
     assert ViolationType.TRIPLE_RIDING.value == "triple_riding"
+    assert ViolationType.FANCY_PLATE.value == "fancy_plate"
+    assert ViolationType.MISSING_MIRROR.value == "missing_mirror"
 
 
 def test_violation_event_defaults():
@@ -35,6 +37,7 @@ def test_violation_event_defaults():
     assert v.clip_path is None
     assert v.bbox == (0, 0, 0, 0)
     assert v.seat_positions is None
+    assert v.evidence_narration is None
 
 
 def test_violation_config_defaults():
@@ -44,6 +47,8 @@ def test_violation_config_defaults():
     assert config.enable_helmet is True
     assert config.enable_wrong_way is True
     assert config.enable_triple_riding is True
+    assert config.enable_fancy_plate is True
+    assert config.enable_missing_mirror is True
     assert config.enable_anpr is True
     assert config.stop_line_y == 0.5
 
@@ -113,6 +118,32 @@ def test_anpr_reader_init():
     assert reader._reader is None
 
 
+def test_anpr_validate_plate():
+    from core.violations.anpr import ANPRReader
+    reader = ANPRReader()
+    result = reader.validate_plate("KA05HJ4392")
+    assert result["valid"] is True
+    assert result["state"] == "KA"
+    assert result["is_hsrp"] is True
+
+
+def test_anpr_validate_non_standard():
+    from core.violations.anpr import ANPRReader
+    reader = ANPRReader()
+    result = reader.validate_plate("XYZ123")
+    assert result["valid"] is False
+    assert result["format"] == "non_standard"
+
+
+def test_anpr_classify_plate_type():
+    from core.violations.anpr import ANPRReader
+    reader = ANPRReader()
+    frame = np.zeros((30, 100, 3), dtype=np.uint8)
+    frame[:, :] = [0, 0, 220]
+    plate_type = reader.classify_plate_type(frame)
+    assert plate_type in ("private_white", "commercial_yellow", "electric_green", "unknown")
+
+
 def test_clip_extractor_init():
     from core.violations.clip_extractor import ClipExtractor
     ext = ClipExtractor(fps=30, buffer_size=300)
@@ -125,7 +156,7 @@ def test_violation_detector_init():
     from core.violations.types import ViolationConfig
     config = ViolationConfig(enable_anpr=False, enable_clip_extract=False)
     vd = ViolationDetector(config)
-    assert len(vd._detectors) == 4
+    assert len(vd._detectors) == 6
 
 
 def test_violation_detector_check_empty():
@@ -156,3 +187,73 @@ def test_trapezium_computation():
     assert trap.shape == (4, 2)
     assert trap[0][0] < trap[1][0]
     assert trap[3][0] < trap[2][0]
+
+
+def test_fancy_plate_detector_init():
+    from core.violations.fancy_plate import FancyPlateDetector
+    det = FancyPlateDetector()
+    assert det.ocr_confidence_threshold == 0.3
+
+
+def test_fancy_plate_no_detections():
+    from core.violations.fancy_plate import FancyPlateDetector
+    det = FancyPlateDetector()
+    frame = make_frame()
+    dets = MockDetections([], [])
+    violations = det.detect(dets, frame, 0)
+    assert len(violations) == 0
+
+
+def test_fancy_plate_with_invalid_ocr():
+    from core.violations.fancy_plate import FancyPlateDetector
+    det = FancyPlateDetector()
+    frame = make_frame()
+    dets = MockDetections([[100, 100, 300, 200]], [2], [1], [0.9])
+    ocr_results = {1: ("XYZ123", 0.8)}
+    violations = det.detect(dets, frame, 0, ocr_results)
+    assert len(violations) == 1
+    assert violations[0].type.value == "fancy_plate"
+
+
+def test_mirror_detector_init():
+    from core.violations.mirror import MirrorDetector
+    det = MirrorDetector()
+    assert det is not None
+
+
+def test_mirror_detector_no_two_wheelers():
+    from core.violations.mirror import MirrorDetector
+    det = MirrorDetector()
+    frame = make_frame()
+    dets = MockDetections([[100, 100, 200, 200]], [2], [1], [0.9])
+    violations = det.detect(dets, frame, 0, "GREEN")
+    assert len(violations) == 0
+
+
+def test_mirror_detector_two_wheeler():
+    from core.violations.mirror import MirrorDetector
+    det = MirrorDetector()
+    frame = make_frame()
+    dets = MockDetections([[100, 100, 300, 300]], [0], [1], [0.9])
+    violations = det.detect(dets, frame, 0, "GREEN")
+    assert isinstance(violations, list)
+
+
+def test_vlm_evidence_template():
+    from core.violations.vlm_evidence import VLMEvidenceLayer
+    from core.violations.types import ViolationEvent, ViolationType
+    vlm = VLMEvidenceLayer()
+    v = ViolationEvent(type=ViolationType.NO_HELMET, track_id=1, frame=10, confidence=0.85, plate_number="KA05HJ4392")
+    narration = vlm._template_narrate(v)
+    assert "no helmet" in narration.lower()
+    assert "KA05HJ4392" in narration
+
+
+def test_vlm_evidence_unavailable():
+    from core.violations.vlm_evidence import VLMEvidenceLayer
+    from core.violations.types import ViolationEvent, ViolationType
+    vlm = VLMEvidenceLayer()
+    v = ViolationEvent(type=ViolationType.TRIPLE_RIDING, track_id=5, frame=20, confidence=0.7)
+    narration = vlm.narrate(v)
+    assert narration is not None
+    assert "triple riding" in narration.lower()

@@ -8,6 +8,11 @@ torchvision>=0.16.0
 # Violation detection
 easyocr>=1.7.0
 
+# VLM evidence narration (optional, lazy-loaded)
+# transformers>=4.40.0
+# accelerate>=0.30.0
+# pillow>=10.0.0
+
 # Dashboard
 streamlit>=1.40.0
 

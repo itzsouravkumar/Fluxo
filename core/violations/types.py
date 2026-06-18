@@ -10,6 +10,9 @@ class ViolationType(str, Enum):
     WRONG_WAY = "wrong_way"
     TRIPLE_RIDING = "triple_riding"
     OVERSPEEDING = "overspeeding"
+    FANCY_PLATE = "fancy_plate"
+    MISSING_MIRROR = "missing_mirror"
+    PEDESTRIAN_BLOCK = "pedestrian_block"
 
 
 @dataclass
@@ -22,6 +25,7 @@ class ViolationEvent:
     clip_path: str | None = None
     bbox: tuple = (0, 0, 0, 0)
     seat_positions: dict | None = None
+    evidence_narration: str | None = None
 
 
 @dataclass
@@ -30,8 +34,11 @@ class ViolationConfig:
     enable_helmet: bool = True
     enable_wrong_way: bool = True
     enable_triple_riding: bool = True
+    enable_fancy_plate: bool = True
+    enable_missing_mirror: bool = True
     enable_anpr: bool = True
     enable_clip_extract: bool = True
+    enable_vlm_narration: bool = False
     stop_line_y: float = 0.5
     overspeed_limit_kmh: float = 60.0
     clip_pre_seconds: int = 2

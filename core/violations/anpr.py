@@ -69,7 +69,6 @@ class ANPRReader:
         if sr is None:
             return crop
         try:
-            import cv2
             h, w = crop.shape[:2]
             if w < 80:
                 result = sr.upsample(crop)

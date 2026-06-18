@@ -67,3 +67,52 @@ class FluxoDetector:
                     )
                 )
         return detections
+
+    def detect_with_enhancement(
+        self,
+        frame: np.ndarray,
+        enhancer=None,
+        tile_detector=None,
+    ) -> tuple[list[Detection], dict]:
+        """Run detection with quality-aware enhancement pipeline.
+
+        Auto-detects low-quality footage and applies super-resolution
+        + sharpening. Optionally uses tile-based detection for far/small objects.
+        Returns detections plus quality metadata.
+        """
+        from .enhancement import FrameEnhancer, TileDetector
+
+        if enhancer is None:
+            enhancer = FrameEnhancer()
+        if tile_detector is None:
+            tile_detector = TileDetector(tile_size=640, overlap=0.2)
+
+        enhanced, quality = enhancer.enhance(frame)
+
+        if quality.get("needs_enhancement"):
+            def _detect_fn(tile, conf):
+                model = self._load_model()
+                results = model(tile, conf=conf, iou=self.iou, verbose=False)[0]
+                dets = []
+                if results.boxes is not None:
+                    for box in results.boxes:
+                        dets.append({
+                            "bbox": box.xyxy[0].cpu().numpy(),
+                            "class_id": int(box.cls[0].item()),
+                            "confidence": float(box.conf[0].item()),
+                        })
+                return dets
+
+            tile_dets = tile_detector.detect_with_tiles(enhanced, _detect_fn, conf=self.conf)
+            detections = [
+                Detection(
+                    bbox=d["bbox"],
+                    class_id=d["class_id"],
+                    confidence=d["confidence"],
+                )
+                for d in tile_dets
+            ]
+        else:
+            detections = self.detect(enhanced)
+
+        return detections, quality

@@ -9,6 +9,8 @@ from .signal_jump import SignalJumpDetector
 from .helmet import HelmetDetector
 from .wrong_way import WrongWayDetector
 from .triple_riding import TripleRidingDetector
+from .fancy_plate import FancyPlateDetector
+from .mirror import MirrorDetector
 from .anpr import ANPRReader
 from .clip_extractor import ClipExtractor
 
@@ -21,8 +23,14 @@ class ViolationDetector:
 
     Uses a single detection+tracking pass to drive all violation checks.
     Every classifier reads from the same per-vehicle track ID, so one
-    detection+tracking pass drives all five violation checks instead of
-    five separate inference calls per frame.
+    detection+tracking pass drives all violation checks instead of
+    separate inference calls per frame.
+
+    Supports:
+    - Signal jump, helmet, wrong-way, triple-riding (core)
+    - Fancy plate, missing mirror (novel classes from research)
+    - ANPR with SR preprocessing + plate validation
+    - VLM evidence narration (post-confirmation, async)
     """
 
     def __init__(self, config: ViolationConfig | None = None):
@@ -31,6 +39,7 @@ class ViolationDetector:
         self._detectors = []
         self._anpr = ANPRReader() if self.config.enable_anpr else None
         self._clip_extractor = ClipExtractor() if self.config.enable_clip_extract else None
+        self._vlm = None
         self._ring_buffer: list[np.ndarray] = []
         self._ring_buffer_max = 300
 
@@ -42,6 +51,20 @@ class ViolationDetector:
             self._detectors.append(WrongWayDetector())
         if self.config.enable_triple_riding:
             self._detectors.append(TripleRidingDetector())
+        if self.config.enable_fancy_plate:
+            self._detectors.append(FancyPlateDetector())
+        if self.config.enable_missing_mirror:
+            self._detectors.append(MirrorDetector())
+
+        if self.config.enable_vlm_narration:
+            self._init_vlm()
+
+    def _init_vlm(self):
+        try:
+            from .vlm_evidence import VLMEvidenceLayer
+            self._vlm = VLMEvidenceLayer()
+        except Exception:
+            self._vlm = None
 
     def feed_frame(self, frame: np.ndarray):
         if len(self._ring_buffer) >= self._ring_buffer_max:
@@ -76,6 +99,13 @@ class ViolationDetector:
                 )
                 if clip_path:
                     v.clip_path = str(clip_path)
+
+        if self._vlm and violations:
+            for v in violations:
+                clip_frames = self._ring_buffer[-90:] if self._ring_buffer else []
+                narration = self._vlm.narrate(v, clip_frames, frame)
+                if narration:
+                    v.evidence_narration = narration
 
         return violations
 

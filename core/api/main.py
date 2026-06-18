@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
@@ -13,6 +13,18 @@ COMMUTER_DIR = Path(__file__).parent.parent.parent / "commuter-app" / "dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print()
+    print("=" * 50)
+    print("  FLUXO is running!")
+    print("=" * 50)
+    print()
+    print("  Dashboard (BTP Operator):  http://localhost:8000/dashboard")
+    print("  Commuter App:              http://localhost:8000/app")
+    print("  API Docs:                  http://localhost:8000/api")
+    print("  Health Check:              http://localhost:8000/api/v1/health")
+    print()
+    print("=" * 50)
+    print()
     yield
 
 
@@ -36,6 +48,10 @@ def create_app() -> FastAPI:
     app.include_router(signals.router)
     app.include_router(streams.router)
     app.include_router(commuter.router)
+
+    @app.get("/favicon.ico")
+    async def favicon():
+        return Response(content=b"", media_type="image/x-icon")
 
     @app.get("/api/v1/health")
     async def health():

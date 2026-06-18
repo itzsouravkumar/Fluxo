@@ -5,8 +5,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: fluxo
-      POSTGRES_USER: fluxo
-      POSTGRES_PASSWORD: fluxo_secret
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
@@ -32,7 +32,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://fluxo:fluxo_secret@postgres:5432/fluxo
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fluxo
       REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
@@ -58,7 +58,7 @@ services:
   pipeline:
     build: .
     environment:
-      DATABASE_URL: postgresql+asyncpg://fluxo:fluxo_secret@postgres:5432/fluxo
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fluxo
       REDIS_URL: redis://redis:6379
       API_URL: http://api:8000
     depends_on:

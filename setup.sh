@@ -28,8 +28,6 @@ echo "Step 5: Database setup (if PostgreSQL running)..."
 if pg_isready -q 2>/dev/null; then
     echo "PostgreSQL detected, creating database..."
     psql -U postgres -c "CREATE DATABASE fluxo;" 2>/dev/null || echo "Database 'fluxo' may already exist"
-    psql -U postgres -c "CREATE USER fluxo WITH PASSWORD 'fluxo_secret';" 2>/dev/null || true
-    psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE fluxo TO fluxo;" 2>/dev/null || true
     echo "Database ready"
 else
     echo "PostgreSQL not running. Start it or use Docker."

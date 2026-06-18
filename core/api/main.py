@@ -13,18 +13,17 @@ COMMUTER_DIR = Path(__file__).parent.parent.parent / "commuter-app" / "dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print()
-    print("=" * 50)
-    print("  FLUXO is running!")
-    print("=" * 50)
-    print()
-    print("  Dashboard (BTP Operator):  http://localhost:8000/dashboard")
-    print("  Commuter App:              http://localhost:8000/app")
-    print("  API Docs:                  http://localhost:8000/api")
-    print("  Health Check:              http://localhost:8000/api/v1/health")
-    print()
-    print("=" * 50)
-    print()
+    import sys
+    print("\n" + "=" * 50, flush=True)
+    print("  FLUXO is running!", flush=True)
+    print("=" * 50, flush=True)
+    print(flush=True)
+    print("  Dashboard (BTP Operator):  http://localhost:8000/dashboard", flush=True)
+    print("  Commuter App:              http://localhost:8000/app", flush=True)
+    print("  API Docs:                  http://localhost:8000/api", flush=True)
+    print("  Health Check:              http://localhost:8000/api/v1/health", flush=True)
+    print(flush=True)
+    print("=" * 50 + "\n", flush=True)
     yield
 
 

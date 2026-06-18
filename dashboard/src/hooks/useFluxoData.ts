@@ -51,7 +51,8 @@ export function useFluxoData() {
   const [alerts, setAlerts] = useState<any[]>([])
   const [connected, setConnected] = useState(false)
 
-  const wsUrl = `ws://${window.location.hostname}:8000/ws/junctions`
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/junctions`
   const { connected: wsConnected, lastMessage } = useWebSocket({
     url: wsUrl,
     onMessage: (data) => {
@@ -69,9 +70,9 @@ export function useFluxoData() {
     const fetchInitial = async () => {
       try {
         const [jRes, vRes, aRes] = await Promise.all([
-          fetch('http://localhost:8000/api/v1/junctions'),
-          fetch('http://localhost:8000/api/v1/violations?limit=20'),
-          fetch('http://localhost:8000/api/v1/commuter/alerts?limit=10'),
+          fetch('/api/v1/junctions'),
+          fetch('/api/v1/violations?limit=20'),
+          fetch('/api/v1/commuter/alerts?limit=10'),
         ])
         const jData = await jRes.json()
         const vData = await vRes.json()

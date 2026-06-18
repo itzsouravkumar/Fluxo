@@ -89,4 +89,4 @@ class HelmetDetector:
         return True
 
 
-import cv2
+import cv2  # noqa: E402

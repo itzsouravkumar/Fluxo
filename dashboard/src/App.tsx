@@ -1,80 +1,80 @@
 import { Header } from './components/layout/Header'
 import { StatusBar } from './components/layout/StatusBar'
+import { SignalPanel } from './components/signal/SignalPanel'
+import { CCTVGrid } from './components/cctv/CCTVGrid'
+import { ViolationFeed } from './components/violations/ViolationFeed'
+import { PredictionStrip } from './components/prediction/PredictionStrip'
+import { useFluxoData } from './hooks/useFluxoData'
 
 function App() {
+  const { junctions, violations, connected } = useFluxoData()
+  const jList = Object.values(junctions)
+  const mainJunction = jList[0] || { name: 'Veerannapalya Jn.', signal_phase: 'N-S', signal_remaining: 23, signal_state: 'GREEN', rl_recommendation: {}, lane_states: {} }
+
   return (
     <div className="min-h-screen bg-fluxo-bg">
       <Header />
       <main className="p-4">
         <div className="grid grid-cols-12 gap-4">
-          {/* Map Panel */}
+          {/* Junction Overview */}
           <div className="col-span-8 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
-            <h2 className="text-lg font-semibold mb-4">Live Junction Map</h2>
-            <div className="h-96 bg-gray-900 rounded flex items-center justify-center text-gray-500">
-              MapmyIndia Map: Coming Soon
+            <h2 className="text-lg font-semibold mb-4">Junction Overview</h2>
+            <div className="grid grid-cols-2 gap-3">
+              {jList.map((j) => (
+                <div key={j.junction_id} className="bg-gray-900 rounded p-3">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium">{j.name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      j.congestion_level === 'CRITICAL' ? 'bg-fluxo-red/20 text-fluxo-red' :
+                      j.congestion_level === 'HIGH' ? 'bg-fluxo-yellow/20 text-fluxo-yellow' :
+                      'bg-fluxo-green/20 text-fluxo-green'
+                    }`}>
+                      {j.congestion_level || 'CLEAR'}
+                    </span>
+                  </div>
+                  <div className="text-2xl font-mono text-fluxo-green mb-1">
+                    {j.signal_phase || 'N-S'} {j.signal_state || 'GREEN'} {j.signal_remaining || 0}s
+                  </div>
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>{j.vehicle_count || 0} vehicles</span>
+                    <span>Density: {(j.density_score || 0).toFixed(2)}</span>
+                  </div>
+                  {j.rl_recommendation?.duration_s > 0 && (
+                    <div className="text-xs text-fluxo-accent mt-1">
+                      RL: {j.rl_recommendation.duration_s}s
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
           {/* Signal Controller Panel */}
           <div className="col-span-4 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
             <h2 className="text-lg font-semibold mb-4">Signal Controller</h2>
-            <div className="space-y-3">
-              <div className="text-sm text-gray-400">Veerannapalya Jn.</div>
-              <div className="text-2xl font-mono text-fluxo-green">N-S GREEN 0:23</div>
-              <div className="text-sm text-fluxo-accent">RL Rec: Extend 15s</div>
-              <div className="flex gap-2 mt-4">
-                <button className="px-4 py-2 bg-fluxo-green text-white rounded text-sm">Apply</button>
-                <button className="px-4 py-2 bg-fluxo-red text-white rounded text-sm">Override</button>
-              </div>
-            </div>
+            <SignalPanel junction={mainJunction} />
           </div>
 
           {/* CCTV Grid */}
           <div className="col-span-6 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
             <h2 className="text-lg font-semibold mb-4">CCTV Grid</h2>
-            <div className="grid grid-cols-2 gap-2">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="aspect-video bg-gray-900 rounded flex items-center justify-center text-gray-500 text-sm">
-                  CAM {i}
-                </div>
-              ))}
-            </div>
+            <CCTVGrid junctions={junctions} />
           </div>
 
           {/* Violation Feed */}
           <div className="col-span-6 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
             <h2 className="text-lg font-semibold mb-4">Violation Feed</h2>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between items-center py-2 border-b border-fluxo-border">
-                <span className="text-fluxo-yellow">No Helmet</span>
-                <span className="text-gray-400">KA-05-MJ-4421</span>
-                <span className="text-gray-500">17:42:11</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-fluxo-border">
-                <span className="text-fluxo-red">Signal Jump</span>
-                <span className="text-gray-400">KA-09-HB-7823</span>
-                <span className="text-gray-500">17:41:58</span>
-              </div>
-            </div>
+            <ViolationFeed violations={violations} />
           </div>
 
           {/* Prediction Strip */}
           <div className="col-span-12 bg-fluxo-card rounded-lg border border-fluxo-border p-4">
             <h2 className="text-lg font-semibold mb-2">Congestion Prediction</h2>
-            <div className="flex gap-8">
-              <div>
-                <span className="text-gray-400">+15min:</span>
-                <span className="ml-2 text-fluxo-critical font-semibold">CRITICAL (0.89)</span>
-              </div>
-              <div>
-                <span className="text-gray-400">+30min:</span>
-                <span className="ml-2 text-fluxo-critical font-semibold">CRITICAL (0.93)</span>
-              </div>
-            </div>
+            <PredictionStrip junctions={junctions} />
           </div>
         </div>
       </main>
-      <StatusBar />
+      <StatusBar connected={connected} junctionCount={jList.length} />
     </div>
   )
 }

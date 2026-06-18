@@ -2,6 +2,8 @@
 
 import pytest
 
+gymnasium = pytest.importorskip("gymnasium", reason="gymnasium not installed")
+
 
 def test_env_init():
     from core.rl.env import FluxoSignalEnv

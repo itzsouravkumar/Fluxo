@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .types import ViolationType, ViolationEvent, ViolationConfig
+from .types import ViolationEvent, ViolationConfig
 from .signal_jump import SignalJumpDetector
 from .helmet import HelmetDetector
 from .wrong_way import WrongWayDetector

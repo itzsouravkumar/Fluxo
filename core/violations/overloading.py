@@ -42,6 +42,10 @@ class OverloadingDetector:
             if cls_id not in (3, 4):
                 continue
 
+            det_conf = float(detections.confidence[i]) if detections.confidence is not None else 0.0
+            if det_conf < 0.7:
+                continue
+
             bbox = detections.xyxy[i]
             x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
             bw, bh = x2 - x1, y2 - y1

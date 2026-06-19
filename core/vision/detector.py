@@ -41,7 +41,20 @@ class FluxoDetector:
         6: 0.0,
     }
 
-    def __init__(self, model_path: str | Path = "yolo26n.pt", conf: float = 0.4, iou: float = 0.5):
+    # Mapping from standard COCO class IDs to Fluxo class IDs
+    # COCO: 0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
+    # Fluxo: 0=two_wheeler, 1=auto_rickshaw, 2=LMV, 3=bus, 4=heavy_vehicle, 5=pedestrian, 6=emergency
+    COCO_TO_FLUXO = {
+        0: 5,  # person -> pedestrian
+        1: 0,  # bicycle -> two_wheeler
+        2: 2,  # car -> light_motor_vehicle
+        3: 0,  # motorcycle -> two_wheeler
+        5: 3,  # bus -> bus
+        7: 4,  # truck -> heavy_vehicle
+        # Note: auto_rickshaw doesn't exist in COCO. We can map some small trucks or just let the model handle it if custom
+    }
+
+    def __init__(self, model_path: str | Path = "yolo26n.pt", conf: float = 0.55, iou: float = 0.5):
         self.model_path = model_path
         self.conf = conf
         self.iou = iou
@@ -55,14 +68,18 @@ class FluxoDetector:
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
         model = self._load_model()
-        results = model(frame, conf=self.conf, iou=self.iou, verbose=False)[0]
+        results = model(frame, conf=0.05, iou=self.iou, imgsz=1920, verbose=False)[0]
         detections = []
         if results.boxes is not None:
             for box in results.boxes:
+                coco_cls = int(box.cls[0].item())
+                if coco_cls not in self.COCO_TO_FLUXO:
+                    continue
+                fluxo_cls = self.COCO_TO_FLUXO[coco_cls]
                 detections.append(
                     Detection(
                         bbox=box.xyxy[0].cpu().numpy(),
-                        class_id=int(box.cls[0].item()),
+                        class_id=fluxo_cls,
                         confidence=float(box.conf[0].item()),
                     )
                 )
@@ -100,8 +117,11 @@ class FluxoDetector:
 
         enhanced, quality = enhancer.enhance(frame)
 
-        if quality.get("needs_enhancement"):
-            conf = adaptive_conf.get_threshold(quality)
+        h, w = frame.shape[:2]
+        needs_tiling = quality.get("needs_enhancement") or max(h, w) > 800
+
+        if needs_tiling:
+            conf = 0.05  # Force very low confidence for tiny vehicles in tiles
 
             rois = None
             if roi_selector is not None:
@@ -109,13 +129,17 @@ class FluxoDetector:
 
             def _detect_fn(tile, tile_conf):
                 model = self._load_model()
-                results = model(tile, conf=tile_conf, iou=self.iou, verbose=False)[0]
+                results = model(tile, conf=tile_conf, iou=self.iou, imgsz=1920, verbose=False)[0]
                 dets = []
                 if results.boxes is not None:
                     for box in results.boxes:
+                        coco_cls = int(box.cls[0].item())
+                        if coco_cls not in self.COCO_TO_FLUXO:
+                            continue
+                        fluxo_cls = self.COCO_TO_FLUXO[coco_cls]
                         dets.append({
                             "bbox": box.xyxy[0].cpu().numpy(),
-                            "class_id": int(box.cls[0].item()),
+                            "class_id": fluxo_cls,
                             "confidence": float(box.conf[0].item()),
                         })
                 return dets

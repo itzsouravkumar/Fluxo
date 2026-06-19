@@ -1,17 +1,12 @@
 # Core ML/CV
 ultralytics>=8.5.0
 supervision>=0.29.0
-opencv-python>=4.10.0
+opencv-python-headless>=4.10.0
 torch>=2.1.0
 torchvision>=0.16.0
 
 # Violation detection
 easyocr>=1.7.0
-
-# VLM evidence narration (optional, lazy-loaded)
-# transformers>=4.40.0
-# accelerate>=0.30.0
-# pillow>=10.0.0
 
 # Dashboard
 streamlit>=1.40.0

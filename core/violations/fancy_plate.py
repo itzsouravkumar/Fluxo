@@ -49,31 +49,17 @@ class FancyPlateDetector:
             if cls_id not in (0, 2):
                 continue
 
+            det_conf = float(detections.confidence[i]) if detections.confidence is not None else 0.0
+            if det_conf < 0.7:
+                continue
+
             tid = int(detections.tracker_id[i]) if hasattr(detections, "tracker_id") and detections.tracker_id is not None else -1
             if tid < 0:
                 continue
 
             plate_text, ocr_conf = ocr_results.get(tid, (None, 0.0))
 
-            if plate_text is None:
-                bbox = detections.xyxy[i].astype(int)
-                x1, y1, x2, y2 = bbox
-                x1 = max(0, min(x1, w - 1))
-                x2 = max(0, min(x2, w))
-                y1 = max(0, min(y1, h - 1))
-                y2 = max(0, min(y2, h))
-                crop = frame[y1:y2, x1:x2]
-                if crop.size > 0 and self._is_plate_region_visible(crop):
-                    violations.append(
-                        ViolationEvent(
-                            type=ViolationType.FANCY_PLATE,
-                            track_id=tid,
-                            frame=frame_idx,
-                            confidence=0.6,
-                            bbox=tuple(bbox),
-                        )
-                    )
-            else:
+            if plate_text is not None:
                 is_valid = bool(INDIAN_PLATE_REGEX.match(plate_text.strip().upper()))
                 if not is_valid and ocr_conf > self.ocr_confidence_threshold:
                     bbox = detections.xyxy[i].astype(int)

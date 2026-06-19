@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+import cv2
 import numpy as np
 
 
@@ -26,14 +27,21 @@ class ANPRReader:
 
     Includes:
     - Super-resolution preprocessing for low-res plate crops
+    - Per-character confidence gating for partial reads
+    - Plate color-aware preprocessing (white/yellow/green backgrounds)
     - Indian plate format validation (HSRP vs non-HSRP)
     - State-code regex gating to reduce false positives
+    - Plate obstruction detection (sticker/tape covering)
+
+    Reference: MDPI Math (May 2025) — SR reduces character confusion 15-20%
+    Reference: Vol 3 — ANPR: Indian Plates & OCR Robustness
     """
 
-    def __init__(self, use_sr: bool = True):
+    def __init__(self, use_sr: bool = True, use_color_aware: bool = True):
         self._reader = None
         self._sr_model = None
         self._use_sr = use_sr
+        self._use_color_aware = use_color_aware
 
     def _init_reader(self):
         if self._reader is None:
@@ -50,7 +58,6 @@ class ANPRReader:
     def _init_sr(self):
         if self._sr_model is None and self._use_sr:
             try:
-                import cv2
                 self._sr_model = cv2.dnn_superres.DnnSuperResImpl_create()
                 sr_path = "models/ESPCN_x2.pb"
                 from pathlib import Path
@@ -71,14 +78,35 @@ class ANPRReader:
         try:
             h, w = crop.shape[:2]
             if w < 80:
-                result = sr.upsample(crop)
-                return result
+                return sr.upsample(crop)
         except Exception:
             pass
         return crop
 
+    def _color_aware_preprocess(self, crop: np.ndarray) -> np.ndarray:
+        if not self._use_color_aware or crop.size == 0:
+            return crop
+
+        plate_type = self.classify_plate_type(crop)
+        lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+
+        if plate_type == "commercial_yellow":
+            mask = b_ch > 140
+            l_ch[mask] = np.clip(l_ch[mask] + 20, 0, 255)
+        elif plate_type == "electric_green":
+            mask = a_ch > 128
+            l_ch[mask] = np.clip(l_ch[mask] + 15, 0, 255)
+        elif plate_type == "private_white":
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+            l_ch = clahe.apply(l_ch)
+
+        lab = cv2.merge([l_ch, a_ch, b_ch])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
     def read_plate(self, crop: np.ndarray) -> str | None:
-        enhanced = self._super_resolve(crop)
+        preprocessed = self._color_aware_preprocess(crop)
+        enhanced = self._super_resolve(preprocessed)
         reader = self._init_reader()
         results = reader.readtext(enhanced)
         if not results:
@@ -89,12 +117,52 @@ class ANPRReader:
             return None
         return plate_text
 
+    def read_plate_with_confidence(self, crop: np.ndarray) -> dict:
+        preprocessed = self._color_aware_preprocess(crop)
+        enhanced = self._super_resolve(preprocessed)
+        reader = self._init_reader()
+        results = reader.readtext(enhanced)
+
+        if not results:
+            return {"plate": None, "overall_confidence": 0.0, "char_confidences": [], "is_partial": True}
+
+        plate_text = " ".join([r[1] for r in results]).strip().upper()
+        char_confs = []
+        for r in results:
+            text = r[1].strip()
+            conf = float(r[2])
+            for ch in text:
+                char_confs.append({"char": ch, "confidence": conf})
+
+        overall_conf = float(np.mean([c["confidence"] for c in char_confs])) if char_confs else 0.0
+        min_char_conf = min([c["confidence"] for c in char_confs]) if char_confs else 0.0
+        is_partial = min_char_conf < 0.6 or overall_conf < 0.5
+
+        return {
+            "plate": plate_text if plate_text else None,
+            "overall_confidence": round(overall_conf, 3),
+            "char_confidences": char_confs,
+            "is_partial": is_partial,
+            "min_char_confidence": round(min_char_conf, 3),
+        }
+
+    def detect_plate_obstruction(self, crop: np.ndarray) -> float:
+        if crop.size == 0:
+            return 0.0
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / max(edges.size, 1)
+        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        bright_ratio = np.sum(thresh > 0) / max(thresh.size, 1)
+        if edge_density < 0.05 and bright_ratio > 0.4:
+            return round(float(1.0 - edge_density), 3)
+        return 0.0
+
     def validate_plate(self, text: str) -> dict:
         if not text:
             return {"valid": False, "format": "empty", "state": None, "is_hsrp": False}
 
         cleaned = re.sub(r"[\s\-]", "", text).upper()
-
         is_hsrp = bool(HSRP_FORMAT.match(cleaned))
         is_valid = bool(INDIAN_PLATE_REGEX.match(cleaned))
 
@@ -112,18 +180,15 @@ class ANPRReader:
         }
 
     def classify_plate_type(self, crop: np.ndarray) -> str:
-        import cv2
         if len(crop.shape) < 3:
             return "unknown"
-
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
         mean_h = np.mean(hsv[:, :, 0])
         mean_s = np.mean(hsv[:, :, 1])
         mean_v = np.mean(hsv[:, :, 2])
-
-        if mean_h > 15 and mean_h < 35 and mean_s > 100:
+        if 15 < mean_h < 35 and mean_s > 100:
             return "commercial_yellow"
-        if mean_h > 85 and mean_h < 135 and mean_s > 50:
+        if 85 < mean_h < 135 and mean_s > 50:
             return "electric_green"
         if mean_s < 30 and mean_v > 180:
             return "private_white"

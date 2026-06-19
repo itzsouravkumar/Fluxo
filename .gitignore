@@ -26,11 +26,18 @@ data/*.zip
 !data/.gitkeep
 !data/README.md
 
-# Model weights (large files)
+# Model weights (large files, loaded from Hub at runtime)
 *.pt
 *.pth
 *.onnx
+*.pb
+models/ESPCN*
 !models/.gitkeep
+# Keep trained helmet model (small, <10MB)
+!models/fluxo_helmet_v1.pt
+
+# Qwen2-VL model (loaded from HuggingFace Hub at runtime)
+models/qwen2-vl*/
 
 # Outputs
 outputs/*

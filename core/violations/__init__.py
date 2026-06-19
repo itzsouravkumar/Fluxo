@@ -11,7 +11,8 @@ from .seatbelt import SeatbeltDetector
 from .overloading import OverloadingDetector
 from .anpr import ANPRReader
 from .clip_extractor import ClipExtractor
-from .vlm_evidence import VLMEvidenceLayer
+from .junction_blocking import JunctionBlockingDetector
+from .evidence_report import capture_evidence_frame, generate_html_report
 
 __all__ = [
     "ViolationType",
@@ -29,5 +30,7 @@ __all__ = [
     "OverloadingDetector",
     "ANPRReader",
     "ClipExtractor",
-    "VLMEvidenceLayer",
+    "capture_evidence_frame",
+    "generate_html_report",
+    "JunctionBlockingDetector",
 ]

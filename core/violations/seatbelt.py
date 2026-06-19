@@ -1,94 +1,112 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
 
-from .types import ViolationType, ViolationEvent
+import numpy as np
+import cv2
+
+from .types import ViolationEvent, ViolationType
+
+SEATBELT_CLASSES = {0: "with_seatbelt", 1: "without_seatbelt"}
 
 
 class SeatbeltDetector:
-    """Detects front-seat occupants not wearing seat belts.
+    """Detects seatbelt absence using ML classification.
 
-    Examines the diagonal chest region of detected LMV occupants.
-    A seat belt creates a visible diagonal stripe across the torso —
-    the detector looks for this high-contrast diagonal pattern.
-    Missing seat belt means the chest region lacks this characteristic
-    diagonal edge.
-
-    Reference: BTP ITeMS data shows seat belt violations are 16% of
-    all automated detections (Times of India, Oct 2025).
-    Reference: Karnataka-Mysuru highway cameras specifically target
-    seat belt non-compliance (Indian Express, Dec 2024).
+    Uses a YOLO classifier trained on driver crops.
+    Falls back to heuristic (diagonal edge scan) if no model is available.
     """
 
-    VIOLATION_TYPE = ViolationType.NO_SEATBELT
+    def __init__(self, classifier_path: str | Path | None = "models/fluxo_seatbelt_v1.pt"):
+        self.classifier_path = classifier_path
+        self._classifier = None
 
-    def __init__(self):
-        pass
+    def _load_classifier(self):
+        if self._classifier is None and self.classifier_path is not None:
+            if Path(self.classifier_path).exists():
+                from ultralytics import YOLO
+                self._classifier = YOLO(str(self.classifier_path))
+        return self._classifier
 
-    def detect(
-        self,
-        detections,
-        frame: np.ndarray,
-        frame_idx: int,
-        signal_state: str = "GREEN",
-    ) -> list[ViolationEvent]:
+    def detect(self, detections, frame: np.ndarray, frame_idx: int, signal_state: str) -> list[ViolationEvent]:
         violations = []
+        h, w = frame.shape[:2]
+
         if not hasattr(detections, "class_id") or detections.class_id is None:
             return violations
 
-        h, w = frame.shape[:2]
         for i in range(len(detections)):
             cls_id = int(detections.class_id[i])
-            if cls_id != 2:
+            if cls_id != 0:
                 continue
 
-            bbox = detections.xyxy[i]
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            bw, bh = x2 - x1, y2 - y1
-            if bw < 30 or bh < 50:
+            det_conf = float(detections.confidence[i]) if detections.confidence is not None else 0.0
+            if det_conf < 0.7:
                 continue
 
-            chest_y1 = max(0, y1 + int(bh * 0.35))
-            chest_y2 = min(h, y1 + int(bh * 0.70))
-            chest_x1 = max(0, x1 + int(bw * 0.15))
-            chest_x2 = min(w, x2 - int(bw * 0.15))
-
-            chest = frame[chest_y1:chest_y2, chest_x1:chest_x2]
-            if chest.size == 0:
+            bbox = detections.xyxy[i].astype(int)
+            x1, y1, x2, y2 = bbox
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
                 continue
 
-            has_seatbelt = self._check_diagonal_stripe(chest)
+            driver_region = self._extract_driver_region(crop)
+            has_seatbelt = self._classify_seatbelt(driver_region if driver_region is not None else crop)
 
             if not has_seatbelt:
-                violations.append(ViolationEvent(
-                    type=self.VIOLATION_TYPE,
-                    track_id=int(detections.tracker_id[i]) if detections.tracker_id is not None else -1,
-                    frame=frame_idx,
-                    confidence=0.65,
-                    bbox=tuple(bbox.astype(int).tolist()),
-                ))
-
+                tid = int(detections.tracker_id[i]) if hasattr(detections, "tracker_id") and detections.tracker_id is not None else -1
+                violations.append(
+                    ViolationEvent(
+                        type=ViolationType.NO_SEATBELT,
+                        track_id=tid,
+                        frame=frame_idx,
+                        confidence=det_conf,
+                        bbox=tuple(bbox),
+                    )
+                )
         return violations
 
-    def _check_diagonal_stripe(self, chest_region: np.ndarray) -> bool:
-        import cv2
-        gray = cv2.cvtColor(chest_region, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
+    def _extract_driver_region(self, vehicle_crop: np.ndarray) -> np.ndarray | None:
+        h, w = vehicle_crop.shape[:2]
+        if h < 10 or w < 10:
+            return None
+        driver_h = max(int(h * 0.6), 1)
+        cx = w // 2
+        half_w = max(w // 3, 1)
+        x1 = max(0, cx - half_w)
+        x2 = min(w, cx + half_w)
+        return vehicle_crop[0:driver_h, x1:x2]
 
-        h, w = edges.shape
-        diag_len = int(min(h, w) * 0.7)
-        if diag_len < 10:
-            return False
+    def _classify_seatbelt(self, crop: np.ndarray) -> bool:
+        model = self._load_classifier()
+        if model is None:
+            return self._heuristic_seatbelt(crop)
 
-        scores = []
-        for offset in range(-w // 4, w // 4, max(w // 20, 1)):
-            pts = []
-            for k in range(diag_len):
-                y = int(k * h / diag_len)
-                x = int(w // 2 + offset + k * w / diag_len * 0.5)
-                if 0 <= y < h and 0 <= x < w:
-                    pts.append(edges[y, x])
-            if pts:
-                scores.append(np.mean(pts))
+        result = model(crop, verbose=False)[0]
+        label = result.probs.top1
+        conf = result.probs.top1conf
 
-        return max(scores) > 20 if scores else False
+        return label == 0 and conf > 0.6
+
+    def _heuristic_seatbelt(self, crop: np.ndarray) -> bool:
+        if len(crop.shape) < 3:
+            return True
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        edge = cv2.Canny(gray, 50, 150)
+
+        best_count = 0
+        for angle in range(-30, 31, 10):
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            rotated = cv2.warpAffine(edge, M, (w, h))
+            for row in range(int(h * 0.3), int(h * 0.8), max(h // 20, 1)):
+                line_count = np.sum(rotated[row, :] > 0)
+                best_count = max(best_count, line_count)
+
+        edge_ratio = best_count / max(w, 1)
+        return edge_ratio < 0.3

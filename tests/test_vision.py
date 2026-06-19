@@ -7,7 +7,7 @@ def test_config_defaults():
     from core.vision.config import DEFAULT_CONFIG, VisionConfig
     config = DEFAULT_CONFIG
     assert isinstance(config, VisionConfig)
-    assert config.detection.confidence == 0.4
+    assert config.detection.confidence == 0.55
     assert config.detection.model_path == "yolo26n.pt"
 
 
@@ -105,7 +105,7 @@ def test_detector_init():
     from core.vision.detector import FluxoDetector
     det = FluxoDetector(model_path="yolo26n.pt")
     assert det.model_path == "yolo26n.pt"
-    assert det.conf == 0.4
+    assert det.conf == 0.55
 
 
 def test_tracker_init():

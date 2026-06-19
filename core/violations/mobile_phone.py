@@ -1,89 +1,109 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
 
-from .types import ViolationType, ViolationEvent
+import numpy as np
+import cv2
+
+from .types import ViolationEvent, ViolationType
+
+MOBILE_CLASSES = {0: "no_phone", 1: "using_phone"}
 
 
 class MobilePhoneDetector:
-    """Detects riders/drivers using mobile phones while riding or driving.
+    """Detects mobile phone usage by drivers using ML classification.
 
-    Uses YOLO-pose keypoints to identify hand-to-ear proximity — the
-    characteristic posture of phone usage. A person holding a phone to
-    their ear will have one hand raised near the head region, which
-    pose estimation reliably captures.
-
-    Reference: Redmon & Farhadi, "YOLOv3: An Incremental Improvement"
-    (arXiv:1804.02767) for keypoint-based action recognition.
-    Reference: BTP ITeMS detects mobile phone usage as one of 13
-    violation types (Hindustan Times, Sep 2024).
+    Uses a YOLO classifier trained on driver upper-body crops.
+    Falls back to heuristic (skin + edge density) if no model is available.
     """
 
-    VIOLATION_TYPE = ViolationType.MOBILE_PHONE
+    def __init__(self, classifier_path: str | Path | None = "models/fluxo_mobile_phone_v1.pt"):
+        self.classifier_path = classifier_path
+        self._classifier = None
 
-    def __init__(self, hand_head_threshold: float = 0.15):
-        self.hand_head_threshold = hand_head_threshold
+    def _load_classifier(self):
+        if self._classifier is None and self.classifier_path is not None:
+            if Path(self.classifier_path).exists():
+                from ultralytics import YOLO
+                self._classifier = YOLO(str(self.classifier_path))
+        return self._classifier
 
-    def detect(
-        self,
-        detections,
-        frame: np.ndarray,
-        frame_idx: int,
-        signal_state: str = "GREEN",
-    ) -> list[ViolationEvent]:
+    def detect(self, detections, frame: np.ndarray, frame_idx: int, signal_state: str) -> list[ViolationEvent]:
         violations = []
+        h, w = frame.shape[:2]
+
         if not hasattr(detections, "class_id") or detections.class_id is None:
             return violations
 
-        h, w = frame.shape[:2]
         for i in range(len(detections)):
             cls_id = int(detections.class_id[i])
-            if cls_id not in (0, 5):
+            if cls_id != 0:
                 continue
 
-            bbox = detections.xyxy[i]
+            det_conf = float(detections.confidence[i]) if detections.confidence is not None else 0.0
+            if det_conf < 0.7:
+                continue
+
+            bbox = detections.xyxy[i].astype(int)
             x1, y1, x2, y2 = bbox
-            bh = y2 - y1
-
-            head_region = frame[
-                max(0, int(y1)): min(h, int(y1 + bh * 0.35)),
-                max(0, int(x1)): min(w, int(x2)),
-            ]
-            if head_region.size == 0:
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
                 continue
 
-            gray = np.mean(head_region.astype(np.float32))
-            skin_mask = self._detect_skin(head_region)
-            skin_ratio = np.mean(skin_mask) if skin_mask.size > 0 else 0
+            upper_body = self._extract_upper_body(crop)
+            uses_phone = self._classify_phone(upper_body if upper_body is not None else crop)
 
-            hand_near_head = skin_ratio > 0.25 and gray < 200
-
-            arm_region = frame[
-                max(0, int(y1 + bh * 0.2)): min(h, int(y1 + bh * 0.5)),
-                max(0, int(x1)): min(w, int(x2)),
-            ]
-            if arm_region.size > 0:
-                arm_skin = self._detect_skin(arm_region)
-                arm_skin_ratio = np.mean(arm_skin) if arm_skin.size > 0 else 0
-                hand_near_head = hand_near_head and arm_skin_ratio > 0.15
-
-            if hand_near_head:
-                confidence = min(0.5 + skin_ratio * 0.5, 0.95)
-                violations.append(ViolationEvent(
-                    type=self.VIOLATION_TYPE,
-                    track_id=int(detections.tracker_id[i]) if detections.tracker_id is not None else -1,
-                    frame=frame_idx,
-                    confidence=confidence,
-                    bbox=tuple(bbox.astype(int).tolist()),
-                ))
-
+            if uses_phone:
+                tid = int(detections.tracker_id[i]) if hasattr(detections, "tracker_id") and detections.tracker_id is not None else -1
+                violations.append(
+                    ViolationEvent(
+                        type=ViolationType.MOBILE_PHONE,
+                        track_id=tid,
+                        frame=frame_idx,
+                        confidence=det_conf,
+                        bbox=tuple(bbox),
+                    )
+                )
         return violations
 
-    def _detect_skin(self, region: np.ndarray) -> np.ndarray:
-        import cv2
-        if len(region.shape) == 2:
-            return np.zeros(region.shape[:2], dtype=bool)
-        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-        lower = np.array([0, 30, 60], dtype=np.uint8)
-        upper = np.array([20, 170, 255], dtype=np.uint8)
-        return cv2.inRange(hsv, lower, upper) > 0
+    def _extract_upper_body(self, vehicle_crop: np.ndarray) -> np.ndarray | None:
+        h, w = vehicle_crop.shape[:2]
+        if h < 10 or w < 10:
+            return None
+        upper_h = max(int(h * 0.5), 1)
+        cx = w // 2
+        half_w = max(w // 2, 1)
+        x1 = max(0, cx - half_w)
+        x2 = min(w, cx + half_w)
+        return vehicle_crop[0:upper_h, x1:x2]
+
+    def _classify_phone(self, crop: np.ndarray) -> bool:
+        model = self._load_classifier()
+        if model is None:
+            return self._heuristic_phone(crop)
+
+        result = model(crop, verbose=False)[0]
+        label = result.probs.top1
+        conf = result.probs.top1conf
+
+        return label == 1 and conf > 0.6
+
+    def _heuristic_phone(self, crop: np.ndarray) -> bool:
+        if len(crop.shape) < 3:
+            return False
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        h_ch, s_ch, v_ch = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+
+        skin_mask = ((h_ch < 25) | (h_ch > 165)) & (s_ch > 40) & (v_ch > 80)
+        skin_ratio = np.sum(skin_mask) / max(skin_mask.size, 1)
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.mean(edges > 0)
+
+        has_hand_near_face = skin_ratio > 0.25 and edge_density > 0.08
+        return has_hand_near_face

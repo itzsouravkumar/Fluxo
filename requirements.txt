@@ -1,5 +1,5 @@
 # Core ML/CV
-ultralytics>=8.5.0
+ultralytics<=8.4.72
 supervision>=0.29.0
 opencv-python-headless>=4.10.0
 torch>=2.1.0

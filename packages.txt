@@ -1,2 +1,0 @@
-# No system dependencies needed.
-# opencv-python-headless provides pre-compiled binaries that do not require libgl or libglib.

@@ -390,7 +390,7 @@ def _run_detection_image(source_path, video_name, detector, violation_engine,
 
 def _run_detection_video(source_path, video_name, detector, violation_engine,
                          signal_state, night_mode, enhance_quality, max_frames,
-                         enable_evidence_hash):
+                         enable_evidence_hash, weather_preprocessor=None):
     """Process video frames through the detection pipeline."""
     from core.vision.config import VEHICLE_CLASSES, DEFAULT_CONFIG
 
@@ -443,7 +443,9 @@ def _run_detection_video(source_path, video_name, detector, violation_engine,
         if not ret:
             break
 
-        if night_mode:
+        if weather_preprocessor is not None:
+            frame, _ = weather_preprocessor.preprocess(frame, night_mode=night_mode)
+        elif night_mode:
             frame = apply_clahe(frame)
 
         # Detection

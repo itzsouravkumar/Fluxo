@@ -106,9 +106,10 @@ st.markdown("""
 def _remap_pedestrians(dets):
     """Remap detections that look like walking pedestrians but are classified as two-wheelers.
 
-    Walking pedestrians have tall, narrow bounding boxes (aspect ratio < 0.45).
-    Two-wheelers are wider relative to height. This catches the common YOLO26n
-    failure mode where pedestrians are misclassified as class 0 (two_wheeler).
+    Walking pedestrians have tall, narrow bounding boxes (aspect ratio < 0.40)
+    AND small absolute area. Two-wheelers are wider relative to height and
+    typically larger in pixel area. This catches the common YOLO26n failure mode
+    where pedestrians are misclassified as class 0 (two_wheeler).
     """
     import supervision as sv
 
@@ -121,10 +122,13 @@ def _remap_pedestrians(dets):
             continue
         x1, y1, x2, y2 = dets.xyxy[i]
         bw, bh = x2 - x1, y2 - y1
-        if bh <= 0:
+        if bh <= 0 or bw <= 0:
             continue
         aspect = bw / bh
-        if aspect < 0.45:
+        area = bw * bh
+        # Must be narrow AND small (a parked motorcycle from the side can be
+        # narrow but it'll be much larger in pixel area)
+        if aspect < 0.40 and area < 15000:
             class_id[i] = 5
 
     return sv.Detections(
@@ -265,67 +269,13 @@ def build_sidebar():
     return signal_state, night_mode, weather_mode, enhance_quality, max_frames, enable_evidence_hash
 
 
-def tab_analysis():
-    """Main video analysis tab."""
-    IMAGE_EXTS = {"jpg", "jpeg", "png", "bmp", "webp"}
-    VIDEO_EXTS = {"mp4", "avi", "mov", "mkv"}
-    uploaded = st.file_uploader("Drop a traffic video or image here",
-                                type=list(VIDEO_EXTS | IMAGE_EXTS),
-                                label_visibility="collapsed")
-
-    source_path = None
-    is_image = False
-    if uploaded is not None:
-        file_ext = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
-        is_image = file_ext in IMAGE_EXTS
-
-        if is_image:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
-            tmp.write(uploaded.read())
-            tmp.close()
-            source_path = tmp.name
-
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.image(source_path, caption=uploaded.name, use_container_width=True)
-            with c2:
-                st.markdown("### Image Info")
-                img = cv2.imread(source_path)
-                if img is not None:
-                    h, w = img.shape[:2]
-                    st.metric("Resolution", f"{w}x{h}")
-                    st.metric("Format", file_ext.upper())
-        else:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tmp.write(uploaded.read())
-            tmp.close()
-            source_path = tmp.name
-
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.video(source_path)
-            with c2:
-                st.markdown("### Video Info")
-                cap = cv2.VideoCapture(source_path)
-                info = {
-                    "FPS": f"{cap.get(cv2.CAP_PROP_FPS):.0f}",
-                    "Resolution": f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}",
-                    "Frames": f"{int(cap.get(cv2.CAP_PROP_FRAME_COUNT))}",
-                }
-                for k, v in info.items():
-                    st.metric(k, v)
-                cap.release()
-
-    if source_path is not None:
-        if st.button("Run Detection", type="primary", width="stretch"):
-            run_detection(source_path, uploaded.name if uploaded else "Unknown", is_image=is_image)
-
 
 def run_detection(source_path, video_name, is_image=False):
     """Execute the detection pipeline and display results."""
 
     signal_state = st.session_state.get("signal_state", "GREEN")
     night_mode = st.session_state.get("night_mode", False)
+    weather_mode = st.session_state.get("weather_mode", True)
     enhance_quality = st.session_state.get("enhance_quality", False)
     max_frames = st.session_state.get("max_frames", 0)
     enable_evidence_hash = st.session_state.get("enable_evidence_hash", True)
@@ -334,17 +284,33 @@ def run_detection(source_path, video_name, is_image=False):
 
     violation_engine.config.evidence_hash_enabled = enable_evidence_hash
 
-    if is_image:
-        _run_detection_image(source_path, video_name, detector, violation_engine,
-                             signal_state, night_mode, enhance_quality, enable_evidence_hash)
-    else:
-        _run_detection_video(source_path, video_name, detector, violation_engine,
-                             signal_state, night_mode, enhance_quality, max_frames,
-                             enable_evidence_hash)
+    # Initialize weather preprocessor if enabled
+    weather_preprocessor = None
+    if weather_mode:
+        from core.vision.weather import WeatherPreprocessor
+        weather_preprocessor = WeatherPreprocessor()
+
+    try:
+        if is_image:
+            _run_detection_image(source_path, video_name, detector, violation_engine,
+                                 signal_state, night_mode, enhance_quality, enable_evidence_hash,
+                                 weather_preprocessor)
+        else:
+            _run_detection_video(source_path, video_name, detector, violation_engine,
+                                 signal_state, night_mode, enhance_quality, max_frames,
+                                 enable_evidence_hash, weather_preprocessor)
+    finally:
+        # Clean up temp file
+        import os
+        try:
+            os.unlink(source_path)
+        except OSError:
+            pass
 
 
 def _run_detection_image(source_path, video_name, detector, violation_engine,
-                         signal_state, night_mode, enhance_quality, enable_evidence_hash):
+                         signal_state, night_mode, enhance_quality, enable_evidence_hash,
+                         weather_preprocessor=None):
     """Process a single image through the detection pipeline."""
     from core.vision.config import VEHICLE_CLASSES, DEFAULT_CONFIG
 
@@ -362,6 +328,10 @@ def _run_detection_image(source_path, video_name, detector, violation_engine,
 
     if night_mode:
         frame = apply_clahe(frame)
+
+    # Apply weather preprocessing if enabled
+    if weather_preprocessor is not None:
+        frame, _ = weather_preprocessor.preprocess(frame, night_mode=night_mode)
 
     if enhance_quality:
         from core.vision.enhancement import (
@@ -381,8 +351,8 @@ def _run_detection_image(source_path, video_name, detector, violation_engine,
             class_id=np.array([d.class_id for d in dets_ultralytics]) if dets_ultralytics else np.empty(0, dtype=int),
         )
     else:
-        results = detector._load_model()(frame, conf=0.15, verbose=False)[0]
-        dets_for_sv = sv.Detections.from_ultralytics(results)
+        # Use the detector's public API instead of accessing _load_model()
+        dets_for_sv = detector.detect(frame)
 
     dets_for_sv = _remap_pedestrians(dets_for_sv)
 
@@ -795,6 +765,7 @@ def main():
     # Store in session state for access in detection
     st.session_state["signal_state"] = signal_state
     st.session_state["night_mode"] = night_mode
+    st.session_state["weather_mode"] = weather_mode
     st.session_state["enhance_quality"] = enhance_quality
     st.session_state["max_frames"] = max_frames
     st.session_state["enable_evidence_hash"] = enable_evidence_hash

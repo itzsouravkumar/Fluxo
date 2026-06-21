@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -16,7 +17,6 @@ from .mobile_phone import MobilePhoneDetector
 from .seatbelt import SeatbeltDetector
 from .overloading import OverloadingDetector
 from .anpr import ANPRReader
-from .clip_extractor import ClipExtractor
 from .clip_extractor import ClipExtractor
 from .pedestrian import PedestrianRedLightDetector
 from .junction_blocking import JunctionBlockingDetector
@@ -49,8 +49,8 @@ class ViolationDetector:
         self._detectors = []
         self._anpr = ANPRReader() if self.config.enable_anpr else None
         self._clip_extractor = ClipExtractor() if self.config.enable_clip_extract else None
-        self._ring_buffer: list[np.ndarray] = []
         self._ring_buffer_max = 300
+        self._ring_buffer: deque[np.ndarray] = deque(maxlen=self._ring_buffer_max) if self.config.enable_clip_extract else None
         self._track_lifetimes: dict[int, int] = {}
         self._reported_violations: set[tuple[int, str]] = set()
 
@@ -74,11 +74,14 @@ class ViolationDetector:
             self._detectors.append(OverloadingDetector())
         if self.config.enable_pedestrian_red_light:
             self._detectors.append(PedestrianRedLightDetector(self.config.stop_line_y))
+        if self.config.enable_junction_blocking:
+            self._detectors.append(JunctionBlockingDetector())
 
     def reset(self):
         self._track_lifetimes.clear()
         self._reported_violations.clear()
-        self._ring_buffer.clear()
+        if self._ring_buffer is not None:
+            self._ring_buffer.clear()
         for d in self._detectors:
             if hasattr(d, '_track_history'):
                 d._track_history.clear()
@@ -90,9 +93,8 @@ class ViolationDetector:
                 d._dominant_direction = None
 
     def feed_frame(self, frame: np.ndarray):
-        if len(self._ring_buffer) >= self._ring_buffer_max:
-            self._ring_buffer.pop(0)
-        self._ring_buffer.append(frame.copy())
+        if self._ring_buffer is not None:
+            self._ring_buffer.append(frame.copy())
 
     def check(
         self,

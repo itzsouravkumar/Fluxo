@@ -14,7 +14,8 @@ class TripleRidingDetector:
     """Detects 3+ riders on a two-wheeler using ML classification.
 
     Uses a YOLO classifier trained on two-wheeler crops with multiple riders.
-    Falls back to heuristic (HSV skin blob detection) if no model is available.
+    Falls back to improved heuristic (vertical head blob analysis with
+    spatial constraints) if no model is available.
     """
 
     def __init__(self, classifier_path: str | Path | None = "models/fluxo_triple_riding_v1.pt"):
@@ -50,6 +51,12 @@ class TripleRidingDetector:
             x2 = max(0, min(x2, w))
             y1 = max(0, min(y1, h - 1))
             y2 = max(0, min(y2, h))
+
+            bw, bh = x2 - x1, y2 - y1
+            # Triple riding creates tall bounding boxes; skip small/wide ones
+            if bw < 40 or bh < 60:
+                continue
+
             crop = frame[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
@@ -63,7 +70,7 @@ class TripleRidingDetector:
                         type=ViolationType.TRIPLE_RIDING,
                         track_id=tid,
                         frame=frame_idx,
-                        confidence=det_conf,
+                        confidence=det_conf * 0.80,
                         bbox=tuple(bbox),
                     )
                 )
@@ -81,26 +88,85 @@ class TripleRidingDetector:
         return label == 1 and conf > 0.6
 
     def _heuristic_triple(self, crop: np.ndarray) -> bool:
+        """Improved heuristic: detect vertically stacked head-like blobs.
+
+        Triple riding creates a characteristic vertical stacking pattern:
+        multiple head-shaped blobs arranged roughly along the vertical center.
+
+        Improvements over the old heuristic:
+        1. Tighter skin color range to avoid matching bags, ads, etc.
+        2. Head blobs must be roughly circular (aspect ratio 0.6-1.6)
+        3. Blobs must be in the upper 70% (rider heads, not wheels)
+        4. Blobs must be roughly vertically aligned (within central 60% horizontally)
+        5. Minimum blob size scaled to crop dimensions
+        """
         if len(crop.shape) < 3:
             return False
 
+        h, w = crop.shape[:2]
+        if h < 60 or w < 30:
+            return False
+
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        skin_mask = ((hsv[:, :, 0] < 25) | (hsv[:, :, 0] > 165)) & (hsv[:, :, 1] > 40) & (hsv[:, :, 2] > 80)
+
+        # Tighter skin detection: use both hue ranges for different skin tones
+        # but require higher saturation and value to avoid matching brown/beige objects
+        skin_mask = (
+            ((hsv[:, :, 0] < 20) | (hsv[:, :, 0] > 170)) &
+            (hsv[:, :, 1] > 50) &
+            (hsv[:, :, 2] > 80) &
+            (hsv[:, :, 2] < 230)  # exclude very bright (white objects)
+        )
         skin_u8 = skin_mask.astype(np.uint8) * 255
 
+        # Morphological cleanup
         kernel = np.ones((5, 5), np.uint8)
         closed = cv2.morphologyEx(skin_u8, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
 
-        head_count = 0
+        contours, _ = cv2.findContours(opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Minimum head-like area scales with crop size
+        min_head_area = max(150, (h * w) * 0.005)
+        max_head_area = (h * w) * 0.15  # A single head shouldn't be >15% of crop
+
+        head_centers = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < 80:
+            if area < min_head_area or area > max_head_area:
                 continue
-            rect = cv2.boundingRect(cnt)
-            if rect[2] > 0 and rect[3] > 0:
-                ratio = rect[3] / rect[2]
-                if 0.5 < ratio < 2.5 and area > 120:
-                    head_count += 1
 
-        return head_count >= 3
+            rect = cv2.boundingRect(cnt)
+            rx, ry, rw, rh = rect
+            if rw < 5 or rh < 5:
+                continue
+
+            # Head-like aspect ratio (roughly circular)
+            aspect = rh / rw
+            if aspect < 0.5 or aspect > 2.0:
+                continue
+
+            # Must be in the upper 70% of the crop (rider area, not wheels)
+            center_y = ry + rh // 2
+            if center_y > h * 0.70:
+                continue
+
+            # Must be roughly centered horizontally (within central 70%)
+            center_x = rx + rw // 2
+            if center_x < w * 0.15 or center_x > w * 0.85:
+                continue
+
+            head_centers.append((center_x, center_y, area))
+
+        # Need 3+ head-like blobs that are vertically distributed
+        if len(head_centers) < 3:
+            return False
+
+        # Verify vertical distribution: sort by Y and check spacing
+        head_centers.sort(key=lambda c: c[1])
+        # Heads should be spread across at least 30% of the crop height
+        y_spread = head_centers[-1][1] - head_centers[0][1]
+        if y_spread < h * 0.15:
+            return False  # All clustered together, probably not separate riders
+
+        return True

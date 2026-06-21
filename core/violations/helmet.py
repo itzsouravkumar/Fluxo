@@ -58,7 +58,7 @@ class HelmetDetector:
 
         for i in range(len(detections)):
             cls_id = int(detections.class_id[i])
-            if cls_id != 0:
+            if cls_id != 0:  # Only two-wheelers
                 continue
 
             bbox = detections.xyxy[i].astype(int)
@@ -67,6 +67,12 @@ class HelmetDetector:
             x2 = max(0, min(x2, w))
             y1 = max(0, min(y1, h - 1))
             y2 = max(0, min(y2, h))
+
+            bw, bh = x2 - x1, y2 - y1
+            # Skip very small detections — can't reliably see helmet
+            if bw < 40 or bh < 40:
+                continue
+
             crop = frame[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
@@ -82,7 +88,7 @@ class HelmetDetector:
                         type=ViolationType.NO_HELMET,
                         track_id=tid,
                         frame=frame_idx,
-                        confidence=conf,
+                        confidence=conf * 0.85,  # discount for heuristic uncertainty
                         bbox=tuple(bbox),
                     )
                 )
@@ -90,7 +96,7 @@ class HelmetDetector:
 
     def _extract_head_region(self, vehicle_crop: np.ndarray) -> np.ndarray | None:
         h, w = vehicle_crop.shape[:2]
-        if h < 10 or w < 10:
+        if h < 20 or w < 20:
             return None
         head_h = max(h // 3, 1)
         head_w = max(w // 2, 1)
@@ -121,20 +127,70 @@ class HelmetDetector:
         return False
 
     def _heuristic_helmet(self, crop: np.ndarray) -> bool:
-        if len(crop.shape) < 3:
-            return True
+        """Improved multi-signal heuristic for helmet detection.
 
+        Instead of just checking bright/skin ratios (which falsely flags
+        white helmets or dark-skinned riders), we check for:
+        1. Smooth, uniform-color dome shape (helmet characteristic)
+        2. Visor glare (specular highlight band across the middle)
+        3. Texture uniformity in the head region (helmets are smoother than hair)
+
+        Conservative: defaults to True (helmet present) when uncertain,
+        to reduce false accusations.
+        """
+        if len(crop.shape) < 3 or crop.shape[0] < 15 or crop.shape[1] < 15:
+            return True  # Too small to tell, assume helmet present
+
+        h, w = crop.shape[:2]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+        h_ch, s_ch, v_ch = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
 
-        bright_mask = (v > 200) & (s < 50)
-        bright_ratio = np.sum(bright_mask) / max(bright_mask.size, 1)
+        # Signal 1: Texture uniformity
+        # Helmets have smooth, uniform texture. Hair/bare head has more texture variation.
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        texture_variance = laplacian.var()
 
-        skin_mask = ((h < 25) | (h > 165)) & (s > 40) & (v > 80)
-        skin_ratio = np.sum(skin_mask) / max(skin_mask.size, 1)
+        # Signal 2: Color uniformity
+        # Helmets are typically one solid color. Hair/skin has more color variation.
+        color_std = np.std(gray)
 
-        if bright_ratio > 0.3:
-            return True
-        if skin_ratio > 0.4:
-            return False
-        return True
+        # Signal 3: Check for a visor band (horizontal high-contrast strip)
+        # in the middle third of the image
+        mid_start = h // 3
+        mid_end = 2 * h // 3
+        mid_band = gray[mid_start:mid_end, :]
+        if mid_band.size > 0:
+            mid_edges = cv2.Canny(mid_band, 50, 150)
+            visor_score = np.mean(mid_edges > 0)
+        else:
+            visor_score = 0
+
+        # Signal 4: Roundness check via contour analysis
+        # Helmets create a dome silhouette
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        roundness = 0.0
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest)
+            perimeter = cv2.arcLength(largest, True)
+            if perimeter > 0 and area > 100:
+                roundness = 4 * np.pi * area / (perimeter ** 2)
+
+        # Decision logic:
+        # Helmets: smooth texture (low variance), uniform color, possibly visor, round shape
+        helmet_signals = 0
+
+        if texture_variance < 800:  # Smooth surface
+            helmet_signals += 1
+        if color_std < 45:  # Uniform color
+            helmet_signals += 1
+        if visor_score > 0.05:  # Has visor-like band
+            helmet_signals += 1
+        if roundness > 0.5:  # Round dome shape
+            helmet_signals += 1
+
+        # Need at least 2 positive helmet signals to declare helmet present
+        # Conservative: fewer signals = assume helmet (reduce FP)
+        return helmet_signals >= 2

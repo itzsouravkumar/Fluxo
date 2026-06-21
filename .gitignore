@@ -64,3 +64,8 @@ Thumbs.db
 
 # Evidence clips
 clips/
+
+# YOLO/Ultralytics Training
+datasets/
+runs/
+yolov8*.pt

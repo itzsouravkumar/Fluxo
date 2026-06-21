@@ -57,10 +57,9 @@ class ViolationEvent:
             "type": self.type.value,
             "track_id": self.track_id,
             "frame": self.frame,
-            "confidence": self.confidence,
+            "confidence": round(self.confidence, 4),
             "plate_number": self.plate_number,
             "bbox": list(self.bbox),
-            "timestamp": datetime.now().isoformat(),
         }), sort_keys=True)
         self.evidence_hash = hashlib.sha256(payload.encode()).hexdigest()
         return self.evidence_hash

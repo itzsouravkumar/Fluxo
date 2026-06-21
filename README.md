@@ -1,15 +1,3 @@
----
-title: FLUXO
-emoji: ""
-colorFrom: indigo
-colorTo: purple
-sdk: streamlit
-sdk_version: 1.40.0
-app_file: app.py
-pinned: true
-license: mit
----
-
 # FLUXO
 
 Automated traffic violation detection on CCTV footage. Built for Gridlock Hackathon 2.0 (Flipkart x Bengaluru Traffic Police).
